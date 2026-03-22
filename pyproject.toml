@@ -1,0 +1,24 @@
+[project]
+name = "llm-playground-bench"
+version = "0.1.0"
+description = "LLM inference speed benchmarking for prompt and generation token throughput"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+  "accelerate",
+  "matplotlib",
+  "pandas",
+  "torch",
+  "transformers",
+]
+
+[tool.uv]
+package = false
+environments = ["sys_platform == 'linux'"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-rocm" }
+
+[[tool.uv.index]]
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm6.4"
