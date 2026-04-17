@@ -13,6 +13,36 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Approximate GPU memory (GB) for Ollama default quantizations
+GPU_MEMORY_GB = {
+    "llama3.2:3b": 2.0,
+    "llama3.2:1b": 1.3,
+    "llama3.1:8b": 4.7,
+    "llama3.1:70b": 40.0,
+    "llama3.3:70b": 40.0,
+    "qwen2.5:3b": 1.9,
+    "qwen2.5:7b": 4.7,
+    "qwen2.5:14b": 9.0,
+    "qwen2.5:32b": 20.0,
+    "qwen2.5:72b": 47.0,
+    "mistral:7b": 4.1,
+    "gemma2:2b": 1.6,
+    "gemma2:9b": 5.5,
+    "gemma2:27b": 16.0,
+    "phi4:14b": 9.1,
+    "phi3:3.8b": 2.2,
+    "deepseek-r1:7b": 4.7,
+    "deepseek-r1:14b": 9.0,
+    "deepseek-r1:32b": 20.0,
+    "glm4:9b": 5.5,
+    "glm4:27b": 16.0,
+    "glm-4v:9b": 6.0,
+    "glm-z1-air:32b": 20.0,
+    "glm-z1-rumination:32b": 20.0,
+    "glm-4.7-flash": 2.8,
+}
+
+
 def main() -> None:
     args = parse_args()
     dataframe = pd.read_csv(args.in_csv)
@@ -32,7 +62,11 @@ def main() -> None:
     axis.set_title("Ollama Model Speed Comparison")
     axis.set_ylabel("Tokens per second")
     axis.set_xticks(list(x))
-    axis.set_xticklabels(models, rotation=15, ha="right")
+    model_labels = [
+        f"{m}\n({GPU_MEMORY_GB[m]:.1f} GB)" if m in GPU_MEMORY_GB else m
+        for m in models
+    ]
+    axis.set_xticklabels(model_labels, rotation=15, ha="right")
     axis.legend()
     axis.grid(axis="y", alpha=0.25)
 

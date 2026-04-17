@@ -143,18 +143,18 @@ Columns include:
 
 ## 5) Rank Ollama models (2+)
 
-Use the helper to benchmark 2 or more models and print a ranked table:
+Use the helper to benchmark 2 or more Ollama models and print a ranked table:
 
 ```bash
-python rank_ollama_models.py \
-  --models qwen2.5:3b llama3.2:3b glm-4.7-flash qwen3-coder-next qwen3.5:latest \
+uv run python rank_ollama_models.py \
+  --models qwen2.5:3b llama3.2:3b glm-4.7-flash gpt-oss:20b gpt-oss:120b qwen3.5:latest mdq100/qwen3.5:27b-96g \
   --runs 3 \
   --warmup 1 \
   --max-new-tokens 256 \
   --rank-by decode \
-  --device cuda \
+  --device rocm \
   --ollama-pull \
-  --csv logs/benchmark_metrics_cuda.csv
+  --csv logs/benchmark_metrics_rocm.csv
 ```
 
 Auto-pull models before benchmarking:
@@ -209,3 +209,77 @@ python plot_cpu_gpu_comparison.py \
 - If CUDA or ROCm is unavailable, benchmark runs on CPU automatically when `--device auto` is used.
 - AMD GPU benchmarking with Transformers requires a ROCm-enabled PyTorch install. AMD GPU benchmarking with Ollama requires an Ollama build with ROCm support.
 - For strict repeatability, run with deterministic prompts and disable sampling (default).
+
+---
+
+## 7) llama.cpp benchmarking (Strix Halo / AMD iGPU)
+
+For llama.cpp models, use **`llama-cpp-bencher.py`** from
+[lhl/strix-halo-testing](https://github.com/lhl/strix-halo-testing/tree/main/llm-bench).
+It wraps `llama-bench` (the built-in llama.cpp binary) and sweeps multiple backends/token
+counts automatically, producing `results.jsonl`, summary tables, and plots.
+
+### Setup
+
+```bash
+# Download the bencher script
+curl -O https://raw.githubusercontent.com/lhl/strix-halo-testing/main/llm-bench/llama-cpp-bencher.py
+
+# Create the directory structure the script expects:
+#   <build-root>/llama.cpp-<name>/build/bin/llama-bench
+ln -s ~/playground/llama.cpp ~/playground/llama.cpp-vulkan-radv
+```
+
+The distrobox container (`llama-vulkan-radv`) ships `llama-bench` alongside `llama-server`,
+so no separate build is needed.
+
+### Run a benchmark
+
+```bash
+MODELS=/home/gberseth/playground/llama.cpp/models
+BENCH=/home/gberseth/playground/llm-playground
+
+distrobox enter llama-vulkan-radv -- bash -c "cd $BENCH && uv run python llama-cpp-bencher.py  --port 8000 \
+  --jinja \
+  --ctx-size 64000 \
+  --cache-type-k q8_0 --cache-type-v q8_0 \
+  --moe \
+  --build-root /home/gberseth/playground \
+  -m $MODELS/qwen3-coder-30B-A3B/BF16/Qwen3-Coder-30B-A3B-Instruct-BF16-00001-of-00002.gguf"
+```
+
+Note: line continuations (`\`) do not work inside `bash -c "..."` — keep the command on one line.
+
+`--moe` is required for Qwen3-30B-A3B — it enables `-b 256` batching, which is what
+produces the ~78 t/s decode result on this hardware.
+
+Launch server for CLAUDE
+
+distrobox enter llama-vulkan-radv -- bash -c "llama-server -m $MODELS/qwen3-30B-A3B/Qwen3-30B-A3B-UD-Q4_K_XL.gguf -ngl 999 --no-mmap --ctx-size 100000 --host 0.0.0.0 --port 8000 --jinja --cache-type-k q8_0 --cache-type-v q8_0"
+
+export ANTHROPIC_BASE_URL="http://localhost:8000"
+export ANTHROPIC_API_KEY="sk-no-key-required"
+export ANTHROPIC_MODEL="private-model"
+
+claude --model private-model[100k]
+ 
+
+
+### Key flags
+
+| Flag | Description |
+|---|---|
+| `--moe` | Enable `-b 256` batching for MoE models (Qwen3, etc.) |
+| `--build-root` | Directory containing `llama.cpp-*/build/bin/llama-bench` |
+| `-p` | Prompt token counts to sweep (default: powers of 2 up to 4096) |
+| `-n` | Generation token counts to sweep |
+| `--rerun` | Force re-run even if results already exist |
+| `--resummarize` | Regenerate README/plots from existing `results.jsonl` without re-running |
+
+### Output
+
+Results are written to a directory named after the model stem:
+- `results.jsonl` — raw timing data per run
+- `README.md` — summary table of pp/tg t/s across backends
+- `pp_tokens_per_sec.png`, `tg_tokens_per_sec.png` — performance curves
+- `system_info.json` — hardware/driver snapshot
