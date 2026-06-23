@@ -1,0 +1,42 @@
+[project]
+name = "llm-playground-bench"
+version = "0.1.0"
+description = "LLM inference speed benchmarking for prompt and generation token throughput"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+  "accelerate",
+  "hf>=1.8.0",
+  "matplotlib",
+  "pandas",
+  "transformers",
+]
+
+[project.optional-dependencies]
+# Install the right torch backend for your GPU:
+#   AMD  (ROCm):   uv sync --extra rocm
+#   NVIDIA (CUDA): uv sync --extra cuda
+rocm = ["torch"]
+cuda = ["torch"]
+
+[tool.uv]
+package = false
+environments = ["sys_platform == 'linux'"]
+index-strategy = "unsafe-best-match"
+conflicts = [
+  [{ extra = "rocm" }, { extra = "cuda" }],
+]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-rocm", extra = "rocm" },
+  { index = "pytorch-cuda", extra = "cuda" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm6.4"
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu128"

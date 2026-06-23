@@ -1,0 +1,6 @@
+logs/
+.env
+.env.*
+.venv/
+.claude/
+.env
