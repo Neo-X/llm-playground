@@ -1,21 +1,23 @@
 #!/bin/bash
-# Forward remote:8001 (llama-server) to localhost:8001
+# Forward remote:8001 (llama-server) to localhost:8001 and launch llama-server
 # Run this on your laptop; then point OpenCode at http://localhost:8001
-# Port 8001 is used so it doesn't clash with a local llama-server on 8000.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$SCRIPT_DIR/.env" ] && set -a && source "$SCRIPT_DIR/.env" && set +a
 
 kinit -r 28d "$KERB_PRINCIPAL" 2>/dev/null || true
 
-echo "Forwarding ${REMOTE_HOST}:8001 → localhost:8001 (llama-server)"
-echo "Point OpenCode at: http://localhost:8001/v1"
-echo ""
+# Kill any stale tunnel on port 8001
+if lsof -ti :8001 &>/dev/null; then
+  echo "Killing stale tunnel on localhost:8001..."
+  lsof -ti :8001 | xargs kill -9 2>/dev/null || true
+  sleep 1
+fi
 
-SSH_ARGS=()
-SSH_ARGS+=(-N)
-SSH_ARGS+=(-L 8001:localhost:8001)
-SSH_ARGS+=("$REMOTE_HOST")
+# Port forwarding in background
+echo "Setting up port forwarding: ${REMOTE_HOST}:8001 → localhost:8001"
+ssh -f -N -L 8001:localhost:8001 "$REMOTE_HOST"
 
-echo "Connecting to ${REMOTE_HOST}..."
-ssh "${SSH_ARGS[@]}"
+# Interactive shell that launches the model in the background
+echo "Opening interactive shell on ${REMOTE_HOST}..."
+ssh -t "$REMOTE_HOST" "source ~/.bashrc 2>/dev/null || true; echo Launching llama-server on remote...; bash \"$SCRIPT_DIR/launch_local_llm_remote.sh\" $@ & disown; echo 'Model launching in background'; exec bash"

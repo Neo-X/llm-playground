@@ -60,17 +60,15 @@ echo "Backend: CUDA (4× RTX PRO 6000 Blackwell, 96 GB each)"
 echo "Endpoint: http://0.0.0.0:8001 (OpenAI-compatible)"
 echo ""
 
-distrobox enter llama-cuda -- bash -c "
-  export PATH='/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
-  exec '$LLAMA_SERVER' \
-    --model '$MODEL_FILE' \
-    --alias '$ALIAS' \
-    -ngl 999 \
-    --ctx-size $CTX \
-    --host 0.0.0.0 \
-    --port 8001 \
-    --jinja \
-    --cache-type-k q8_0 \
-    --cache-type-v q8_0 \
-    $EXTRA_FLAGS
-" 2>&1
+export LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/local/cuda/lib:${LD_LIBRARY_PATH:-}"
+exec "$LLAMA_SERVER" \
+  --model "$MODEL_FILE" \
+  --alias "$ALIAS" \
+  -ngl 999 \
+  --ctx-size $CTX \
+  --host 0.0.0.0 \
+  --port 8001 \
+  --jinja \
+  --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  $EXTRA_FLAGS 2>&1
