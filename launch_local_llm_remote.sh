@@ -6,24 +6,24 @@
 # Usage: bash launch_local_llm_remote.sh [model] [quant]
 #
 # Models:
-#   qwen3.6-35b   (default) — Qwen3.6-35B-A3B MoE, single-file GGUF
+#   qwen3.6-35b-a3b   (default) — Qwen3.6-35B-A3B MoE, single-file GGUF
 #   minimax-m3              — MiniMax-M3, sharded GGUF (~265 GB)
 #
-# Quant (qwen3.6-35b only, default UD-Q4_K_XL):
+# Quant (qwen3.6-35b-a3b only, default UD-Q4_K_XL):
 #   UD-Q4_K_XL  UD-Q4_K_M  UD-Q5_K_M  UD-Q6_K  Q8_0  etc.
 
 set -e
 
 MODELS=/home/gberseth/playground/llama.cpp/models
-MODEL_NAME=${1:-qwen3.6-35b}
+MODEL_NAME=${1:-qwen3.6-35b-a3b}
 LLAMA_SERVER=/home/gberseth/playground/llama.cpp/build/bin/llama-server
 
 case "$MODEL_NAME" in
-  qwen3.6-35b)
+  qwen3.6-35b-a3b)
     QUANT=${2:-UD-Q4_K_XL}
     MODEL_FILE="$MODELS/qwen3.6-35b-a3b/Qwen3.6-35B-A3B-${QUANT}.gguf"
-    ALIAS="qwen3.6-35b"
-    CTX=65536
+    ALIAS="qwen3.6-35b-a3b"
+    CTX=256000
     EXTRA_FLAGS="-b 256 -ub 256"
     ;;
   minimax-m3)
@@ -36,7 +36,7 @@ case "$MODEL_NAME" in
     ;;
   *)
     echo "Unknown model: $MODEL_NAME"
-    echo "Usage: $0 [qwen3.6-35b|minimax-m3] [quant]"
+    echo "Usage: $0 [qwen3.6-35b-a3b|minimax-m3] [quant]"
     exit 1
     ;;
 esac
@@ -60,7 +60,7 @@ echo "Backend: CUDA (4× RTX PRO 6000 Blackwell, 96 GB each)"
 echo "Endpoint: http://0.0.0.0:8001 (OpenAI-compatible)"
 echo ""
 
-export LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/local/cuda/lib:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="/usr/local/lib/ollama/cuda_v12:/projects/autodata/.venv/lib/python3.11/site-packages/nvidia/nccl/lib:/usr/local/cuda/lib64:/usr/local/cuda/lib:${LD_LIBRARY_PATH:-}"
 exec "$LLAMA_SERVER" \
   --model "$MODEL_FILE" \
   --alias "$ALIAS" \

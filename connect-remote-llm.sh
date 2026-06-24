@@ -7,10 +7,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 kinit -r 28d "$KERB_PRINCIPAL" 2>/dev/null || true
 
-# Kill any stale tunnel on port 8001
-if lsof -ti :8001 &>/dev/null; then
+# Kill any stale SSH tunnel on port 8001
+if pkill -f "ssh.*L 8001" 2>/dev/null || pkill -f "ssh.*8001:localhost:8001" 2>/dev/null; then
   echo "Killing stale tunnel on localhost:8001..."
-  lsof -ti :8001 | xargs kill -9 2>/dev/null || true
   sleep 1
 fi
 
