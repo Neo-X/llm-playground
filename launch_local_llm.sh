@@ -14,6 +14,7 @@ case "$MODEL_NAME" in
   qwen3.6-35b-a3b)
     QUANT=${2:-UD-Q4_K_XL}
     MODEL_FILE="$MODELS/qwen3.6-35B-A3B/Qwen3.6-35B-A3B-${QUANT}.gguf"
+    MMPROJ="$MODELS/qwen3.6-35B-A3B/mmproj-F16.gguf"
     ALIAS="qwen3.6-35b-a3b"
     CTX=256000
     EXTRA_FLAGS="-b 128 -ub 128"
@@ -21,6 +22,7 @@ case "$MODEL_NAME" in
   qwen3.6-27b)
     QUANT=${2:-Q8_0}
     MODEL_FILE="$MODELS/qwen3.6-27b/Qwen3.6-27B-${QUANT}.gguf"
+    MMPROJ="$MODELS/qwen3.6-27b/mmproj-F16.gguf"
     ALIAS="qwen3.6-27b"
     CTX=256000
     EXTRA_FLAGS="-b 128 -ub 128"
@@ -32,4 +34,7 @@ case "$MODEL_NAME" in
     ;;
 esac
 
-distrobox enter llama-vulkan-radv -- bash -c "llama-server -m '$MODEL_FILE' --alias '$ALIAS' -ngl 999 --no-mmap --ctx-size $CTX --host 0.0.0.0 --port 8000 --jinja --cache-type-k q8_0 --cache-type-v q8_0 $EXTRA_FLAGS"
+MMPROJ_FLAG=""
+[[ -n "${MMPROJ:-}" && -f "$MMPROJ" ]] && MMPROJ_FLAG="--mmproj $MMPROJ"
+
+distrobox enter llama-vulkan-radv -- bash -c "llama-server -m $MODEL_FILE --alias $ALIAS $MMPROJ_FLAG -ngl 999 --no-mmap --ctx-size $CTX --host 0.0.0.0 --port 8000 --jinja --cache-type-k q8_0 --cache-type-v q8_0 $EXTRA_FLAGS"
