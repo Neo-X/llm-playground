@@ -15,7 +15,11 @@ fi
 
 # Port forwarding in background
 echo "Setting up port forwarding: ${REMOTE_HOST}:8001 → localhost:8001"
-ssh -f -N -L 8001:localhost:8001 "$REMOTE_HOST"
+ssh -f -N -L 8001:localhost:8001 \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=6 \
+  -o ExitOnForwardFailure=yes \
+  "$REMOTE_HOST"
 
 # Interactive shell that launches the model in the background
 echo "Opening interactive shell on ${REMOTE_HOST}..."
