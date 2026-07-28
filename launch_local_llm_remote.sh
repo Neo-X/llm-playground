@@ -23,6 +23,7 @@ case "$MODEL_NAME" in
   qwen3.6-35b-a3b)
     QUANT=${2:-UD-Q4_K_XL}
     MODEL_FILE="$MODELS/qwen3.6-35b-a3b/Qwen3.6-35B-A3B-${QUANT}.gguf"
+    MMPROJ="$MODELS/qwen3.6-35b-a3b/mmproj-F16.gguf"
     ALIAS="qwen3.6-35b-a3b"
     CTX=256000
     EXTRA_FLAGS="-b 256 -ub 256"
@@ -69,10 +70,14 @@ echo "Backend: CUDA (4× RTX PRO 6000 Blackwell, 96 GB each)"
 echo "Endpoint: http://0.0.0.0:8001 (OpenAI-compatible)"
 echo ""
 
+MMPROJ_FLAG=""
+[[ -n "${MMPROJ:-}" && -f "$MMPROJ" ]] && MMPROJ_FLAG="--mmproj $MMPROJ" && echo "mmproj: $MMPROJ"
+
 export LD_LIBRARY_PATH="/usr/local/lib/ollama/cuda_v12:/projects/autodata/.venv/lib/python3.11/site-packages/nvidia/nccl/lib:/usr/local/cuda/lib64:/usr/local/cuda/lib:${LD_LIBRARY_PATH:-}"
 exec "$LLAMA_SERVER" \
   --model "$MODEL_FILE" \
   --alias "$ALIAS" \
+  $MMPROJ_FLAG \
   -ngl 999 \
   --ctx-size $CTX \
   --host 0.0.0.0 \

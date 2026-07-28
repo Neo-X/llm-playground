@@ -1,35 +1,80 @@
-# Fast Setup — Ollama on Remote + OpenCode
+# Fast Setup — LLM Server (Local + Remote) + OpenCode
 
-Get Ollama running on a remote server and connect your local OpenCode to it in ~5 minutes.
+Run a vision-capable LLM locally or on a remote GPU server and connect OpenCode to it.
 
 ---
 
 ## Prerequisites
 
-- SSH access to a remote machine with a GPU
-- Local machine has `ssh`, `ollama`, and [opencode.ai](https://opencode.ai) installed
+- SSH access to a remote machine with a GPU (for remote setup)
+- Local machine has `ssh` and [opencode.ai](https://opencode.ai) installed
+- [distrobox](https://github.com/89luca89/distrobox) + `llama-vulkan-radv` container (for local setup)
+- [`hf` CLI](https://github.com/huggingface/huggingface_hub): `uv tool install huggingface_hub`
 
 ---
 
-## On the remote server
+## Option A — Local (AMD iGPU / Strix Halo)
 
-### 1. Install Ollama
+### 1. Download models
 
+**Qwen3.6-35B-A3B (MoE, default):**
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh
+HF_XET_HIGH_PERFORMANCE=1 hf download unsloth/Qwen3.6-35B-A3B-GGUF \
+  Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf mmproj-F16.gguf \
+  --local-dir ~/playground/llama.cpp/models/qwen3.6-35B-A3B
 ```
 
-### 2. Pull a model
-
+**Qwen3.6-27B (dense, higher quality):**
 ```bash
-ollama pull qwen3.6:35b-a3b
+HF_XET_HIGH_PERFORMANCE=1 hf download unsloth/Qwen3.6-27B-GGUF \
+  Qwen3.6-27B-Q8_0.gguf mmproj-F16.gguf \
+  --local-dir ~/playground/llama.cpp/models/qwen3.6-27b
 ```
 
-Ollama listens on `localhost:11434` by default.
+Both models include `mmproj-F16.gguf` for vision/image support.
+
+### 2. Launch the server
+
+```bash
+./launch_local_llm.sh                  # 35B-A3B (default)
+./launch_local_llm.sh qwen3.6-27b     # 27B dense
+```
+
+Server listens on `http://localhost:8000` (OpenAI-compatible).
+
+### 3. Configure OpenCode
+
+Add to `opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "llamacpp-local": {
+      "name": "Local llama.cpp",
+      "options": {
+        "baseURL": "http://127.0.0.1:8000/v1"
+      },
+      "models": {
+        "qwen3.6-35b-a3b": {
+          "name": "Qwen3.6 35B-A3B (local)",
+          "limit": { "context": 256000, "output": 8192 },
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        },
+        "qwen3.6-27b": {
+          "name": "Qwen3.6 27B (local)",
+          "limit": { "context": 256000, "output": 8192 },
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        }
+      }
+    }
+  }
+}
+```
 
 ---
 
-## On your local machine
+## Option B — Remote GPU Server (llama.cpp via SSH tunnel)
 
 ### 1. Clone this repo and set up `.env`
 
@@ -46,12 +91,59 @@ REMOTE_HOST=your-remote-server.edu
 KERB_PRINCIPAL=youruser@YOUR.INSTITUTION.EDU
 ```
 
-- `REMOTE_HOST` — the SSH hostname of your remote GPU server
-- `KERB_PRINCIPAL` — your Kerberos principal (e.g. `jdoe@MIT.EDU`)
+### 2. Download the model and mmproj on the remote
 
-### 2. Add SSH config for Ollama
+SSH into the remote server and run:
 
-Add this to `~/.ssh/config`:
+```bash
+HF_XET_HIGH_PERFORMANCE=1 hf download unsloth/Qwen3.6-35B-A3B-GGUF \
+  Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf mmproj-F16.gguf \
+  --local-dir ~/playground/llama.cpp/models/qwen3.6-35b-a3b
+```
+
+### 3. Open the tunnel and launch the server
+
+```bash
+./connect-remote-llm.sh
+```
+
+This sets up an SSH port-forward (`localhost:8001` → `remote:8001`) and launches `llama-server` on the remote in the background. The interactive shell stays open so you can monitor output.
+
+### 4. Configure OpenCode
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "llamacpp-remote": {
+      "name": "Remote llama.cpp",
+      "options": {
+        "baseURL": "http://127.0.0.1:8001/v1"
+      },
+      "models": {
+        "qwen3.6-35b-a3b": {
+          "name": "Qwen3.6 35B-A3B (remote)",
+          "limit": { "context": 256000, "output": 8192 },
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        }
+      }
+    }
+  }
+}
+```
+
+---
+
+## Option C — Remote Ollama (simpler, slower)
+
+### 1. Install Ollama on the remote
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull qwen3.6:35b-a3b
+```
+
+### 2. Add SSH config for Ollama tunnel
 
 ```ssh-config
 Host <REMOTE_HOST>-ollama
@@ -60,21 +152,13 @@ Host <REMOTE_HOST>-ollama
     LocalForward 11435 localhost:11434
 ```
 
-Replace `<REMOTE_HOST>` and the host details with your actual values. The `LocalForward` line tunnels `localhost:11435` → `<remote>:11434` so Ollama is reachable locally through SSH.
-
-> If your SSH setup uses a jump host, add `ProxyJump <jump-host>` between `Host` and `HostName`.
-
 ### 3. Open the tunnel
 
 ```bash
 ./connect-remote.sh
 ```
 
-This starts the SSH port-forward (keeps running in the foreground).
-
 ### 4. Configure OpenCode
-
-Create `opencode.json` in your project directory (or `~/.config/opencode/opencode.json` for a global config):
 
 ```json
 {
@@ -88,10 +172,7 @@ Create `opencode.json` in your project directory (or `~/.config/opencode/opencod
       "models": {
         "qwen3.6:35b-a3b": {
           "name": "Qwen3.6 35B",
-          "limit": {
-            "context": 32768,
-            "output": 8192
-          }
+          "limit": { "context": 32768, "output": 8192 }
         }
       }
     }
@@ -99,24 +180,20 @@ Create `opencode.json` in your project directory (or `~/.config/opencode/opencod
 }
 ```
 
-### 5. Run OpenCode
-
-```bash
-opencode
-```
-
-Select **Ollama on remote › Qwen3.6 35B** from the model picker.
-
 ---
 
 ## Quick reference
 
 | Command | Purpose |
 |---|---|
-| `./connect-remote.sh` | Open SSH tunnel to remote Ollama |
-| `./connect-remote-llm.sh` | Open SSH tunnel for llama.cpp server |
+| `./launch_local_llm.sh` | Start local llama-server (35B-A3B, port 8000) |
+| `./launch_local_llm.sh qwen3.6-27b` | Start local llama-server (27B, port 8000) |
+| `./connect-remote-llm.sh` | Open SSH tunnel + launch llama-server on remote (port 8001) |
+| `./connect-remote.sh` | Open SSH tunnel to remote Ollama (port 11435) |
 | `ollama-remote list` | List models on remote Ollama |
 | `ollama-remote pull qwen3.6:35b-a3b` | Pull a model to remote Ollama |
-| `ollama-remote-stop` | Close the SSH tunnel |
+| `ollama-remote-stop` | Close the Ollama SSH tunnel |
 
-> **Note:** Ollama on the remote server is convenient but slower than llama.cpp. Use it for quick iteration; switch to llama.cpp for performance-critical work.
+> **Vision/image support:** Both local models ship with `mmproj-F16.gguf`. The launch scripts pick it up automatically when the file is present alongside the model — no extra flags needed. Add `"modalities": { "input": ["text", "image"], "output": ["text"] }` to each model entry in your OpenCode config to enable image uploads.
+
+> **Performance:** Local Vulkan (AMD Strix Halo) ≈ remote CUDA for these model sizes. Use remote for the largest quants or multi-user scenarios.
