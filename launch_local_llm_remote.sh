@@ -8,6 +8,7 @@
 # Models:
 #   qwen3.6-35b-a3b   (default) — Qwen3.6-35B-A3B MoE, single-file GGUF
 #   minimax-m3              — MiniMax-M3, sharded GGUF (~265 GB)
+#   deepseek-v4-flash       — DeepSeek-V4-Flash, sharded GGUF (Q8_0, 7 shards)
 #
 # Quant (qwen3.6-35b-a3b only, default UD-Q4_K_XL):
 #   UD-Q4_K_XL  UD-Q4_K_M  UD-Q5_K_M  UD-Q6_K  Q8_0  etc.
@@ -34,9 +35,17 @@ case "$MODEL_NAME" in
     CTX=131072
     EXTRA_FLAGS="--parallel 4"
     ;;
+  deepseek-v4-flash)
+    QUANT=${2:-Q8_0}
+    MODEL_DIR="$MODELS/DeepSeek-V4-Flash-Q8/$QUANT"
+    MODEL_FILE=$(ls "$MODEL_DIR"/*.gguf 2>/dev/null | sort | head -1)
+    ALIAS="deepseek-v4-flash"
+    CTX=131072
+    EXTRA_FLAGS="--parallel 4"
+    ;;
   *)
     echo "Unknown model: $MODEL_NAME"
-    echo "Usage: $0 [qwen3.6-35b-a3b|minimax-m3] [quant]"
+    echo "Usage: $0 [qwen3.6-35b-a3b|minimax-m3|deepseek-v4-flash] [quant]"
     exit 1
     ;;
 esac
