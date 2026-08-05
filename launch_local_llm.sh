@@ -1,7 +1,9 @@
 #!/bin/bash
-## Launch a local LLM server via llama-server, using the official
-## ghcr.io/ggml-org/llama.cpp Vulkan image (works on both AMD and NVIDIA GPUs
-## via their respective Vulkan drivers - no vendor-specific image needed).
+## Launch a local LLM server via llama-server, using official ggml-org
+## llama.cpp images. Vulkan is used by default (works on both AMD and
+## NVIDIA GPUs); models needing CUDA-only fused kernels (e.g. DeepSeek V4's
+## Lightning Indexer / HC ops, which silently fall back to CPU on Vulkan and
+## tank decode speed) are pinned to the CUDA image instead.
 ##
 ## Use tests/update_and_test_llama_image.py to pull/test new image builds; it
 ## promotes tested images to the "vulkan-known-good" tag used here.
@@ -9,14 +11,16 @@
 ## Usage: ./launch_local_llm.sh [model] [quant]
 ##
 ## Models:
-##   qwen3.6-35b-a3b       (default) — Qwen3.6-35B-A3B MoE
-##   qwen3.6-27b                     — Qwen3.6-27B dense
-##   deepseek-v4-flash-q8             — DeepSeek-V4-Flash MoE, Q8_0
+##   qwen3.6-35b-a3b       (default) — Qwen3.6-35B-A3B MoE, Vulkan
+##   qwen3.6-27b                     — Qwen3.6-27B dense, Vulkan
+##   deepseek-v4-flash-q8             — DeepSeek-V4-Flash MoE, Q8_0, CUDA (needs fused ops)
 
 set -euo pipefail
 
 MODELS=/home/gberseth/playground/llama.cpp/models
-IMAGE=${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-vulkan-known-good}
+VULKAN_IMAGE=ghcr.io/ggml-org/llama.cpp:server-vulkan-known-good
+CUDA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda
+IMAGE=${LLAMA_IMAGE:-$VULKAN_IMAGE}
 CONTAINER_NAME=llama-vulkan-server
 MODEL_NAME=${1:-qwen3.6-35b-a3b}
 
@@ -27,7 +31,7 @@ case "$MODEL_NAME" in
     MMPROJ="$MODELS/qwen3.6-35b-a3b/mmproj-F16.gguf"
     ALIAS="qwen3.6-35b-a3b"
     CTX=256000
-    EXTRA_FLAGS="-b 128 -ub 128"
+    EXTRA_FLAGS=(-b 128 -ub 128)
     ;;
   qwen3.6-27b)
     QUANT=${2:-Q8_0}
@@ -35,14 +39,16 @@ case "$MODEL_NAME" in
     MMPROJ="$MODELS/qwen3.6-27b/mmproj-F16.gguf"
     ALIAS="qwen3.6-27b"
     CTX=256000
-    EXTRA_FLAGS="-b 128 -ub 128"
+    EXTRA_FLAGS=(-b 128 -ub 128)
     ;;
   deepseek-v4-flash-q8)
     MODEL_FILE="$MODELS/DeepSeek-V4-Flash-Q8/Q8_0/DeepSeek-V4-Flash-Q8_0-00001-of-00007.gguf"
     MMPROJ=""
     ALIAS="deepseek-v4-flash-q8"
     CTX=256000
-    EXTRA_FLAGS="-b 128 -ub 128"
+    EXTRA_FLAGS=(-b 128 -ub 128)
+    IMAGE=${LLAMA_IMAGE:-$CUDA_IMAGE}
+    CONTAINER_NAME=llama-cuda-server
     ;;
   *)
     echo "Unknown model: $MODEL_NAME"
@@ -61,7 +67,7 @@ for group in render video; do
 done
 command -v nvidia-smi >/dev/null 2>&1 && GPU_FLAGS+=(--gpus all)
 
-docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+docker rm -f llama-vulkan-server llama-cuda-server >/dev/null 2>&1 || true
 
 docker run --rm --name "$CONTAINER_NAME" \
   "${GPU_FLAGS[@]}" \
@@ -69,5 +75,5 @@ docker run --rm --name "$CONTAINER_NAME" \
   -p 8000:8000 \
   "$IMAGE" \
   -m "$MODEL_FILE" --alias "$ALIAS" "${MMPROJ_FLAGS[@]}" \
-  -ngl 999 --no-mmap --ctx-size "$CTX" --host 0.0.0.0 --port 8000 --jinja \
-  --cache-type-k q8_0 --cache-type-v q8_0 "$EXTRA_FLAGS"
+  -ngl 999 --load-mode none --ctx-size "$CTX" --host 0.0.0.0 --port 8000 --jinja \
+  --cache-type-k q8_0 --cache-type-v q8_0 "${EXTRA_FLAGS[@]}"
