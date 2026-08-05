@@ -182,6 +182,23 @@ Host <REMOTE_HOST>-ollama
 
 ---
 
+## Complete OpenCode Config (all options)
+
+A ready-to-use config covering all providers is at [`opencode.json`](opencode.json) in this repo. Copy it to a new machine with:
+
+```bash
+cp opencode.json ~/.config/opencode/opencode.json
+```
+
+| Provider key | Backend | Port | Launch command |
+|---|---|---|---|
+| `llama-cpp` | llama.cpp local | 8000 | `./launch_local_llm.sh` |
+| `llama-cpp-onyx` | llama.cpp on onyx (SSH tunnel) | 8001 | `./connect-remote-llm.sh` |
+| `ollama` | Ollama local | 11434 | `ollama serve` |
+| `onyx` | Ollama on onyx (SSH tunnel) | 11435 | `./connect-remote.sh` |
+
+---
+
 ## Quick reference
 
 | Command | Purpose |
