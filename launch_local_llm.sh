@@ -5,8 +5,16 @@
 ## Lightning Indexer / HC ops, which silently fall back to CPU on Vulkan and
 ## tank decode speed) are pinned to the CUDA image instead.
 ##
-## Use tests/update_and_test_llama_image.py to pull/test new image builds; it
-## promotes tested images to the "vulkan-known-good" tag used here.
+## Two backends, auto-selected by GPU hardware:
+##   - Onyx (4x Nvidia GPUs): docker run using the official
+##     ghcr.io/ggml-org/llama.cpp Vulkan or CUDA image (see above).
+##     Use tests/update_and_test_llama_image.py to pull/test new image builds;
+##     it promotes tested images to the "vulkan-known-good" tag used here.
+##   - AMD laptop (Strix Halo iGPU, no Nvidia): the existing
+##     "llama-vulkan-radv" distrobox container (see setup_llm_distrobox.sh),
+##     entered directly with distrobox enter.
+##
+## Set BACKEND=docker or BACKEND=distrobox to override auto-detection.
 ##
 ## Usage: ./launch_local_llm.sh [model] [quant]
 ##
@@ -22,13 +30,14 @@ VULKAN_IMAGE=ghcr.io/ggml-org/llama.cpp:server-vulkan-known-good
 CUDA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda
 IMAGE=${LLAMA_IMAGE:-$VULKAN_IMAGE}
 CONTAINER_NAME=llama-vulkan-server
+DISTROBOX_CONTAINER=llama-vulkan-radv
 MODEL_NAME=${1:-qwen3.6-35b-a3b}
 
 case "$MODEL_NAME" in
   qwen3.6-35b-a3b)
     QUANT=${2:-UD-Q4_K_XL}
-    MODEL_FILE="$MODELS/qwen3.6-35b-a3b/Qwen3.6-35B-A3B-${QUANT}.gguf"
-    MMPROJ="$MODELS/qwen3.6-35b-a3b/mmproj-F16.gguf"
+    MODEL_FILE="$MODELS/qwen3.6-35B-A3B/Qwen3.6-35B-A3B-${QUANT}.gguf"
+    MMPROJ="$MODELS/qwen3.6-35B-A3B/mmproj-F16.gguf"
     ALIAS="qwen3.6-35b-a3b"
     CTX=256000
     EXTRA_FLAGS=(-b 128 -ub 128)
@@ -57,8 +66,31 @@ case "$MODEL_NAME" in
     ;;
 esac
 
+# Auto-detect backend: onyx has 4 Nvidia GPUs and uses the docker server;
+# the AMD laptop (Strix Halo iGPU, no nvidia-smi) uses the old distrobox
+# container instead.
+if [[ -z "${BACKEND:-}" ]]; then
+  if command -v nvidia-smi >/dev/null 2>&1 && [[ "$(nvidia-smi -L | wc -l)" -eq 4 ]]; then
+    BACKEND=docker
+  else
+    BACKEND=distrobox
+  fi
+fi
+
 MMPROJ_FLAGS=()
 [[ -n "$MMPROJ" && -f "$MMPROJ" ]] && MMPROJ_FLAGS=(--mmproj "$MMPROJ")
+
+if [[ "$BACKEND" == "distrobox" ]]; then
+  echo "Using distrobox container '$DISTROBOX_CONTAINER' (AMD laptop backend)"
+  CMD="llama-server -m $MODEL_FILE --alias $ALIAS"
+  [[ -n "$MMPROJ" && -f "$MMPROJ" ]] && CMD="$CMD --mmproj $MMPROJ"
+  CMD="$CMD -ngl 999 --no-mmap --ctx-size $CTX --host 0.0.0.0 --port 8000 --jinja"
+  CMD="$CMD --cache-type-k q8_0 --cache-type-v q8_0 ${EXTRA_FLAGS[*]}"
+  distrobox enter "$DISTROBOX_CONTAINER" -- bash -c "$CMD"
+  exit 0
+fi
+
+echo "Using docker image '$IMAGE' (onyx 4x Nvidia backend)"
 
 GPU_FLAGS=(--device /dev/dri)
 for group in render video; do

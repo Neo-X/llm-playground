@@ -1,0 +1,62 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "llama-cpp": {
+      "name": "llama.cpp (local)",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://localhost:8000/v1"
+      },
+      "models": {
+        "qwen3.6-35b-a3b": {
+          "name": "Qwen3.6 35B-A3B MoE",
+          "limit": { "context": 256000, "output": 8192 },
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        },
+        "qwen3.6-27b": {
+          "name": "Qwen3.6 27B",
+          "limit": { "context": 256000, "output": 8192 },
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        }
+      }
+    },
+    "llama-cpp-onyx": {
+      "name": "llama.cpp (onyx)",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://localhost:8001/v1"
+      },
+      "models": {
+        "qwen3.6-35b-a3b": {
+          "name": "Qwen3.6 35B-A3B MoE",
+          "limit": { "context": 256000, "output": 8192 },
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        }
+      }
+    },
+    "ollama": {
+      "name": "Ollama (local)",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://127.0.0.1:11434/v1"
+      },
+      "models": {
+        "qwen3.6:35b-a3b": {
+          "name": "qwen3.6:35b-a3b"
+        }
+      }
+    },
+    "onyx": {
+      "name": "Ollama on onyx",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://127.0.0.1:11435/v1"
+      },
+      "models": {
+        "qwen3.6:35b-a3b": {
+          "name": "qwen3.6:35b-a3b"
+        }
+      }
+    }
+  }
+}
