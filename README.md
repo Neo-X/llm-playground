@@ -446,10 +446,10 @@ Ollama runs on the remote server but is not reachable directly. The `<REMOTE_HOS
 **Step 1 — open the tunnel** (keep this terminal running):
 
 ```bash
-./connect-remote.sh
+./connect-remote-llm.sh
 ```
 
-This renews your Kerberos ticket and starts the SSH port-forward.
+This renews your Kerberos ticket and starts the SSH port-forwards (llama-server and Ollama).
 
 **Step 2 — run OpenCode** in another terminal:
 

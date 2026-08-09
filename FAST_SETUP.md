@@ -155,7 +155,7 @@ Host <REMOTE_HOST>-ollama
 ### 3. Open the tunnel
 
 ```bash
-./connect-remote.sh
+./connect-remote-llm.sh
 ```
 
 ### 4. Configure OpenCode
@@ -195,7 +195,7 @@ cp opencode.json ~/.config/opencode/opencode.json
 | `llama-cpp` | llama.cpp local | 8000 | `./launch_local_llm.sh` |
 | `llama-cpp-onyx` | llama.cpp on onyx (SSH tunnel) | 8001 | `./connect-remote-llm.sh` |
 | `ollama` | Ollama local | 11434 | `ollama serve` |
-| `onyx` | Ollama on onyx (SSH tunnel) | 11435 | `./connect-remote.sh` |
+| `onyx` | Ollama on onyx (SSH tunnel) | 11435 | `./connect-remote-llm.sh` |
 
 ---
 
@@ -205,8 +205,7 @@ cp opencode.json ~/.config/opencode/opencode.json
 |---|---|
 | `./launch_local_llm.sh` | Start local llama-server (35B-A3B, port 8000) |
 | `./launch_local_llm.sh qwen3.6-27b` | Start local llama-server (27B, port 8000) |
-| `./connect-remote-llm.sh` | Open SSH tunnel + launch llama-server on remote (port 8001) |
-| `./connect-remote.sh` | Open SSH tunnel to remote Ollama (port 11435) |
+| `./connect-remote-llm.sh` | Open SSH tunnels (llama-server + Ollama) and launch llama-server on remote (ports 8001, 11435) |
 | `ollama-remote list` | List models on remote Ollama |
 | `ollama-remote pull qwen3.6:35b-a3b` | Pull a model to remote Ollama |
 | `ollama-remote-stop` | Close the Ollama SSH tunnel |
