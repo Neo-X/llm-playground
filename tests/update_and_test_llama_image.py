@@ -19,6 +19,7 @@ Usage:
 import argparse
 import grp
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -26,8 +27,8 @@ import time
 
 import requests
 
-MODELS_DIR = "/home/gberseth/playground/llama.cpp/models"
-LLAMA_CPP_DIR = "/home/gberseth/playground/llama.cpp"
+REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODELS_DIR = f"{REPO_DIR}/models"
 IMAGE = "ghcr.io/ggml-org/llama.cpp:server-vulkan"
 KNOWN_GOOD_TAG = "ghcr.io/ggml-org/llama.cpp:server-vulkan-known-good"
 CONTAINER_NAME = "llama-vulkan-image-test"
@@ -40,11 +41,19 @@ MODELS = [
     {
         "name": "qwen3.6-35b-a3b",
         "path": f"{MODELS_DIR}/qwen3.6-35b-a3b/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+        "mmproj": f"{MODELS_DIR}/qwen3.6-35b-a3b/mmproj-F16.gguf",
         "alias": "qwen3.6-35b-a3b",
+    },
+    {
+        "name": "qwen3.6-27b",
+        "path": f"{MODELS_DIR}/qwen3.6-27b/Qwen3.6-27B-Q8_0.gguf",
+        "mmproj": f"{MODELS_DIR}/qwen3.6-27b/mmproj-F16.gguf",
+        "alias": "qwen3.6-27b",
     },
     {
         "name": "deepseek-v4-flash-q8",
         "path": f"{MODELS_DIR}/DeepSeek-V4-Flash-Q8/Q8_0/DeepSeek-V4-Flash-Q8_0-00001-of-00007.gguf",
+        "mmproj": None,
         "alias": "deepseek-v4-flash-q8",
     },
 ]
@@ -80,6 +89,10 @@ def start_container(image: str, model: dict) -> None:
         image,
         "-m", model["path"],
         "--alias", model["alias"],
+    ]
+    if model.get("mmproj"):
+        cmd += ["--mmproj", model["mmproj"], "--image-min-tokens", "1024"]
+    cmd += [
         "-ngl", "999", "--no-mmap", "--ctx-size", "32768", "-np", "1",
         "--host", "0.0.0.0", "--port", "8000", "--jinja",
     ]
@@ -104,28 +117,68 @@ def wait_for_health(timeout_s: int) -> bool:
     return False
 
 
-README_REGRESSION_KEYWORDS = ["llama.cpp", "inference", "gguf", "c++"]
+README_REGRESSION_KEYWORDS = ["benchmark", "prompt", "token", "generation"]
 README_REGRESSION_MIN_HITS = 2
+
+# Ground-truth text for the vision regression fixture (tests/vlaps.png). A
+# transcription is considered a pass once it recovers at least 30% of these
+# words, since exact OCR-style transcription varies across quants/models.
+VISION_TEST_IMAGE = os.path.join(REPO_DIR, "tests", "vlaps.png")
+VISION_EXPECTED_TEXT = (
+    "Pickup the black bowl on the stove and place it on the plate. "
+    "root simulated task success VLA Policy VLAPS Action Chunk Sampling Selection world model"
+)
+VISION_REGRESSION_MIN_RATIO = 0.30
 
 
 def opencode_binary() -> str:
     return shutil.which("opencode") or os.path.expanduser("~/.opencode/bin/opencode")
 
 
-def passes_regression_check(summary: str) -> bool:
+def _significant_words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-zA-Z]+", text.lower()) if len(w) > 2}
+
+
+def passes_regression_check(summary: str, keywords: list[str], min_hits: int) -> bool:
     lower = summary.lower()
-    hits = sum(1 for keyword in README_REGRESSION_KEYWORDS if keyword in lower)
-    return hits >= README_REGRESSION_MIN_HITS
+    hits = sum(1 for keyword in keywords if keyword in lower)
+    return hits >= min_hits
+
+
+def vision_overlap_ratio(transcription: str) -> float:
+    expected = _significant_words(VISION_EXPECTED_TEXT)
+    found = _significant_words(transcription)
+    return len(expected & found) / len(expected)
 
 
 def summarize_readme(alias: str) -> str | None:
     cmd = [
         opencode_binary(), "run",
         "--model", f"{OPENCODE_PROVIDER}/{alias}",
-        "--dir", LLAMA_CPP_DIR,
+        "--dir", REPO_DIR,
         "-f", "README.md",
         "--auto",
         "Summarize this file in 3-4 sentences.",
+    ]
+    try:
+        result = subprocess.run(
+            cmd, check=False, capture_output=True, text=True, timeout=OPENCODE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    return result.stdout.strip()
+
+
+def transcribe_vision_image(alias: str) -> str | None:
+    cmd = [
+        opencode_binary(), "run",
+        "--model", f"{OPENCODE_PROVIDER}/{alias}",
+        "--dir", REPO_DIR,
+        "What text appears in this image? Transcribe it exactly.",
+        "-f", VISION_TEST_IMAGE,
+        "--auto",
     ]
     try:
         result = subprocess.run(
@@ -159,11 +212,26 @@ def test_model(image: str, model: dict) -> bool:
         print("FAIL: opencode did not return a summary")
         return False
 
-    if not passes_regression_check(summary):
+    if not passes_regression_check(summary, README_REGRESSION_KEYWORDS, README_REGRESSION_MIN_HITS):
         print(f"FAIL: summary didn't mention enough expected keywords {README_REGRESSION_KEYWORDS}:\n{summary}")
         return False
 
     print(f"PASS: opencode summary:\n{summary}")
+
+    if model.get("mmproj"):
+        print("asking opencode to transcribe the vision regression image (tests/vlaps.png)...")
+        transcription = transcribe_vision_image(model["alias"])
+        if transcription is None:
+            print("FAIL: opencode did not return an image transcription")
+            return False
+
+        ratio = vision_overlap_ratio(transcription)
+        if ratio < VISION_REGRESSION_MIN_RATIO:
+            print(f"FAIL: only {ratio:.0%} word overlap with expected text (need >= {VISION_REGRESSION_MIN_RATIO:.0%}):\n{transcription}")
+            return False
+
+        print(f"PASS: opencode transcription ({ratio:.0%} word overlap):\n{transcription}")
+
     return True
 
 

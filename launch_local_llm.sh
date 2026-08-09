@@ -78,12 +78,12 @@ if [[ -z "${BACKEND:-}" ]]; then
 fi
 
 MMPROJ_FLAGS=()
-[[ -n "$MMPROJ" && -f "$MMPROJ" ]] && MMPROJ_FLAGS=(--mmproj "$MMPROJ")
+[[ -n "$MMPROJ" && -f "$MMPROJ" ]] && MMPROJ_FLAGS=(--mmproj "$MMPROJ" --image-min-tokens 1024)
 
 if [[ "$BACKEND" == "distrobox" ]]; then
   echo "Using distrobox container '$DISTROBOX_CONTAINER' (AMD laptop backend)"
   CMD="llama-server -m $MODEL_FILE --alias $ALIAS"
-  [[ -n "$MMPROJ" && -f "$MMPROJ" ]] && CMD="$CMD --mmproj $MMPROJ"
+  [[ -n "$MMPROJ" && -f "$MMPROJ" ]] && CMD="$CMD --mmproj $MMPROJ --image-min-tokens 1024"
   CMD="$CMD -ngl 999 --no-mmap --ctx-size $CTX --host 0.0.0.0 --port 8000 --jinja"
   CMD="$CMD --cache-type-k q8_0 --cache-type-v q8_0 ${EXTRA_FLAGS[*]}"
   distrobox enter "$DISTROBOX_CONTAINER" -- bash -c "$CMD"
