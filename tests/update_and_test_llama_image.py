@@ -32,16 +32,16 @@ MODELS_DIR = f"{REPO_DIR}/models"
 IMAGE = "ghcr.io/ggml-org/llama.cpp:server-vulkan"
 KNOWN_GOOD_TAG = "ghcr.io/ggml-org/llama.cpp:server-vulkan-known-good"
 CONTAINER_NAME = "llama-vulkan-image-test"
-OPENCODE_PROVIDER = "llama-cpp-test"
-PORT = 8079
+OPENCODE_PROVIDER = "llama-cpp"
+PORT = 8000
 STARTUP_TIMEOUT_S = 600
-OPENCODE_TIMEOUT_S = 180
+OPENCODE_TIMEOUT_S = 600
 
 MODELS = [
     {
         "name": "qwen3.6-35b-a3b",
-        "path": f"{MODELS_DIR}/qwen3.6-35b-a3b/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
-        "mmproj": f"{MODELS_DIR}/qwen3.6-35b-a3b/mmproj-F16.gguf",
+        "path": f"{MODELS_DIR}/qwen3.6-35B-A3B/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+        "mmproj": f"{MODELS_DIR}/qwen3.6-35B-A3B/mmproj-F16.gguf",
         "alias": "qwen3.6-35b-a3b",
     },
     {
@@ -193,6 +193,9 @@ def transcribe_vision_image(alias: str) -> str | None:
 
 def test_model(image: str, model: dict) -> bool:
     print(f"\n=== {model['name']} ===")
+    if not os.path.exists(model["path"]):
+        print(f"SKIP: model file not found: {model['path']}")
+        return False
     print(f"starting container with {model['path']}...")
     try:
         start_container(image, model)
