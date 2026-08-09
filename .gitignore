@@ -4,3 +4,5 @@ logs/
 .venv/
 .claude/
 .env
+
+models/*
