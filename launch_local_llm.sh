@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-MODELS=/home/gberseth/playground/llama.cpp/models
+MODELS=/home/gberseth/playground/llm-playground/models
 VULKAN_IMAGE=ghcr.io/ggml-org/llama.cpp:server-vulkan-known-good
 CUDA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda
 IMAGE=${LLAMA_IMAGE:-$VULKAN_IMAGE}
