@@ -56,7 +56,18 @@ def parse_args() -> argparse.Namespace:
         default=["ollama", "llamacpp"],
         help="Which backends to run for each model (llamacpp only applies to models with a known alias).",
     )
-    parser.add_argument("--prompt", type=str, default="Explain in 5 short bullet points how transformer inference latency is measured.")
+    parser.add_argument(
+        "--prompt",
+        type=str,
+        default=None,
+        help="Prompt text to benchmark. If omitted, loaded from --prompt-file.",
+    )
+    parser.add_argument(
+        "--prompt-file",
+        type=str,
+        default="prompts/prompt_2048.txt",
+        help="File to load the prompt from when --prompt is not given.",
+    )
     parser.add_argument("--max-new-tokens", type=int, default=128)
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--warmup", type=int, default=1)
@@ -199,6 +210,11 @@ def plot_results(dataframe: pd.DataFrame, out_png: str) -> None:
 def main() -> None:
     args = parse_args()
     os.makedirs("logs", exist_ok=True)
+
+    if args.prompt is None:
+        with open(args.prompt_file, "r", encoding="utf-8") as handle:
+            args.prompt = handle.read()
+        print(f"Loaded prompt from {args.prompt_file} ({len(args.prompt)} chars)")
 
     rows = []
     timestamp = datetime.now(timezone.utc).isoformat()
