@@ -57,16 +57,10 @@ def parse_args() -> argparse.Namespace:
         help="Which backends to run for each model (llamacpp only applies to models with a known alias).",
     )
     parser.add_argument(
-        "--prompt",
-        type=str,
-        default=None,
-        help="Prompt text to benchmark. If omitted, loaded from --prompt-file.",
-    )
-    parser.add_argument(
         "--prompt-file",
         type=str,
         default="prompts/prompt_2048.txt",
-        help="File to load the prompt from when --prompt is not given.",
+        help="File to load the benchmark prompt from.",
     )
     parser.add_argument("--max-new-tokens", type=int, default=128)
     parser.add_argument("--runs", type=int, default=3)
@@ -211,10 +205,9 @@ def main() -> None:
     args = parse_args()
     os.makedirs("logs", exist_ok=True)
 
-    if args.prompt is None:
-        with open(args.prompt_file, "r", encoding="utf-8") as handle:
-            args.prompt = handle.read()
-        print(f"Loaded prompt from {args.prompt_file} ({len(args.prompt)} chars)")
+    with open(args.prompt_file, "r", encoding="utf-8") as handle:
+        args.prompt = handle.read()
+    print(f"Loaded prompt from {args.prompt_file} ({len(args.prompt)} chars)")
 
     rows = []
     timestamp = datetime.now(timezone.utc).isoformat()

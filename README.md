@@ -69,10 +69,13 @@ uv run python sweep_models.py \
 By default the prompt is loaded from `prompts/prompt_2048.txt` (2048 chars, ~409
 tokens) — long enough to give a meaningful prefill measurement instead of being
 dominated by fixed per-request overhead. Pass `--prompt-file <path>` to use a
-different prompt file, or `--prompt "..."` for an inline one-off. Each run/warmup
-call gets a unique nonce prepended internally so server-side prompt caching (both
-Ollama and llama.cpp cache by prefix) can't turn later runs into cache hits and
-inflate the prefill number.
+different prompt file (e.g. `prompts/prompt_long.txt`, ~30,000 chars / ~5,100
+tokens). There is no `--prompt` flag for inline text — always point at a file,
+since a short literal string skews prefill measurements toward per-request
+overhead rather than real prefill work. Each run/warmup call gets a unique nonce
+prepended internally so server-side prompt caching (both Ollama and llama.cpp
+cache by prefix) can't turn later runs into cache hits and inflate the prefill
+number.
 
 Models without a known llama.cpp alias are benchmarked on Ollama only (a note
 is printed, the run isn't interrupted). Add new GGUF-backed models by adding
