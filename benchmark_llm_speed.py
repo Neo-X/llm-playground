@@ -166,6 +166,150 @@ def ollama_check_gpu_layers(host: str, model_name: str) -> None:
                 print(f"GPU check: {gpu_layers / (1024**3):.2f} GiB in VRAM ({pct:.0f}% of model)")
 
 
+def run_benchmark_llamacpp(
+    model_path: str,
+    prompt: str,
+    max_new_tokens: int,
+    do_sample: bool,
+    temperature: float,
+    top_p: float,
+    n_gpu_layers: int = -1,
+    n_ctx: int = 2048,
+    n_batch: int = 512,
+) -> dict:
+    try:
+        from llama_cpp import Llama
+    except ImportError:
+        raise RuntimeError(
+            "llama-cpp-python is not installed. Install with: pip install llama-cpp-python"
+        )
+
+    if not isinstance(model_path, str) or not os.path.isfile(model_path):
+        raise FileNotFoundError(f"GGUF model not found: {model_path}")
+
+    print(f"  Loading llama.cpp model: {model_path}")
+
+    model = Llama(
+        model_path=model_path,
+        n_gpu_layers=n_gpu_layers,
+        n_ctx=n_ctx,
+        n_batch=n_batch,
+        verbose=False,
+    )
+
+    prompt_tokens_ids = model.tokenize(prompt.encode("utf-8", errors="ignore"))
+    prompt_tokens = len(prompt_tokens_ids)
+
+    prefill_start = time.perf_counter()
+    model.eval(prompt_tokens_ids)
+    prefill_time_s = time.perf_counter() - prefill_start
+
+    eos_token = model.token_eos()
+    generated_ids: list[int] = []
+    decode_start = time.perf_counter()
+    for token_id in model.generate(
+        prompt_tokens_ids,
+        temp=temperature if do_sample else 0.0,
+        top_p=top_p,
+    ):
+        if token_id == eos_token:
+            break
+        generated_ids.append(token_id)
+        if len(generated_ids) >= max_new_tokens:
+            break
+    decode_time_s = time.perf_counter() - decode_start
+
+    generated_text = model.detokenize(generated_ids).decode("utf-8", errors="ignore")
+    generated_tokens = len(generated_ids)
+
+    prefill_tps = (prompt_tokens / prefill_time_s) if prefill_time_s > 0 else 0.0
+    decode_tps = (generated_tokens / decode_time_s) if decode_time_s > 0 else 0.0
+
+    model.close()
+
+    return {
+        "prompt_tokens": prompt_tokens,
+        "generated_tokens": generated_tokens,
+        "prefill_time_s": prefill_time_s,
+        "decode_time_s": decode_time_s,
+        "prefill_tps": prefill_tps,
+        "decode_tps": decode_tps,
+        "generated_text": generated_text,
+    }
+
+
+def llamacpp_post(host: str, path: str, payload: dict, timeout: int = 600) -> dict:
+    url = f"{host.rstrip('/')}{path}"
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        error_body = ""
+        try:
+            error_body = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            error_body = ""
+        raise RuntimeError(
+            f"llama.cpp server request failed ({exc.code}) at {url}. Response: {error_body or exc.reason}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(
+            f"Failed to reach llama.cpp server at {url}. "
+            f"Is it running? (see launch_local_llm.sh)"
+        ) from exc
+
+
+def run_benchmark_llamacpp_server(
+    host: str,
+    prompt: str,
+    max_new_tokens: int,
+    do_sample: bool,
+    temperature: float,
+    top_p: float,
+) -> dict:
+    """Benchmark a model served by llama.cpp's `llama-server` (see launch_local_llm.sh),
+    using its native /completion endpoint, which reports prefill/decode timings directly."""
+    payload = {
+        "prompt": prompt,
+        "n_predict": max_new_tokens,
+        "temperature": temperature if do_sample else 0.0,
+        "top_p": top_p,
+        "stream": False,
+    }
+
+    response = llamacpp_post(host, "/completion", payload)
+    timings = response.get("timings", {})
+
+    prompt_tokens = int(timings.get("prompt_n", response.get("tokens_evaluated", 0)))
+    generated_tokens = int(timings.get("predicted_n", response.get("tokens_predicted", 0)))
+    prefill_time_s = float(timings.get("prompt_ms", 0)) / 1000
+    decode_time_s = float(timings.get("predicted_ms", 0)) / 1000
+
+    prefill_tps = float(timings.get("prompt_per_second", 0)) or (
+        prompt_tokens / prefill_time_s if prefill_time_s > 0 else 0.0
+    )
+    decode_tps = float(timings.get("predicted_per_second", 0)) or (
+        generated_tokens / decode_time_s if decode_time_s > 0 else 0.0
+    )
+
+    return {
+        "prompt_tokens": prompt_tokens,
+        "generated_tokens": generated_tokens,
+        "prefill_time_s": prefill_time_s,
+        "decode_time_s": decode_time_s,
+        "prefill_tps": prefill_tps,
+        "decode_tps": decode_tps,
+        "generated_text": response.get("content", ""),
+    }
+
+
 def run_benchmark_ollama(
     host: str,
     model_name: str,
@@ -305,7 +449,7 @@ def parse_args() -> argparse.Namespace:
         "--backend",
         type=str,
         default="transformers",
-        choices=["transformers", "ollama"],
+        choices=["transformers", "ollama", "llamacpp"],
         help="Inference backend to benchmark.",
     )
     parser.add_argument(
@@ -318,6 +462,15 @@ def parse_args() -> argparse.Namespace:
         "--ollama-pull",
         action="store_true",
         help="Pull model from Ollama registry before benchmarking.",
+    )
+    parser.add_argument(
+        "--llamacpp-host",
+        type=str,
+        default="http://localhost:8000",
+        help=(
+            "URL of a running llama.cpp `llama-server` instance (see launch_local_llm.sh, "
+            "which serves models via docker/distrobox)."
+        ),
     )
     parser.add_argument(
         "--prompt",
@@ -429,7 +582,7 @@ def main() -> None:
                 f"GPU ({runtime_name}): {props.name} | "
                 f"VRAM: {props.total_memory / (1024**3):.2f} GiB"
             )
-    else:
+    elif args.backend == "ollama":
         print(f"Backend: ollama | Model: {args.model} | Host: {args.ollama_host}")
         if args.device == "amd":
             print("Device: amd | Ollama will use GPU offload if its ROCm build is installed.")
@@ -437,6 +590,9 @@ def main() -> None:
             print("Note: Flash Attention for Ollama is server-side. Start Ollama with OLLAMA_FLASH_ATTENTION=1 to enable it.")
         if args.ollama_pull:
             ollama_pull_model(args.ollama_host, args.model)
+    else:
+        print(f"Backend: llama.cpp | Host: {args.llamacpp_host}")
+        print("Note: expects a llama-server already running there (see launch_local_llm.sh).")
 
     print(f"Running {args.warmup} warmup run(s)...")
     for _ in range(args.warmup):
@@ -451,7 +607,7 @@ def main() -> None:
                 temperature=args.temperature,
                 top_p=args.top_p,
             )
-        else:
+        elif args.backend == "ollama":
             _ = run_benchmark_ollama(
                 host=args.ollama_host,
                 model_name=args.model,
@@ -461,6 +617,15 @@ def main() -> None:
                 temperature=args.temperature,
                 top_p=args.top_p,
                 device=ollama_device,
+            )
+        else:
+            _ = run_benchmark_llamacpp_server(
+                host=args.llamacpp_host,
+                prompt=args.prompt,
+                max_new_tokens=min(16, args.max_new_tokens),
+                do_sample=args.do_sample,
+                temperature=args.temperature,
+                top_p=args.top_p,
             )
 
     print(f"Running {args.runs} measured run(s)...")
@@ -479,7 +644,7 @@ def main() -> None:
                 top_p=args.top_p,
             )
             device_label = format_device_label(device, accelerator_label)
-        else:
+        elif args.backend == "ollama":
             metrics = run_benchmark_ollama(
                 host=args.ollama_host,
                 model_name=args.model,
@@ -496,6 +661,16 @@ def main() -> None:
                 device_label = "ollama-gpu"
             else:
                 device_label = f"ollama-{ollama_device}"
+        else:
+            metrics = run_benchmark_llamacpp_server(
+                host=args.llamacpp_host,
+                prompt=args.prompt,
+                max_new_tokens=args.max_new_tokens,
+                do_sample=args.do_sample,
+                temperature=args.temperature,
+                top_p=args.top_p,
+            )
+            device_label = "llamacpp-server"
 
         row = {
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),

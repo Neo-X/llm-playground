@@ -21,6 +21,8 @@
 ## Models:
 ##   qwen3.6-35b-a3b       (default) — Qwen3.6-35B-A3B MoE, Vulkan
 ##   qwen3.6-27b                     — Qwen3.6-27B dense, Vulkan
+##   qwen2.5-3b                      — Qwen2.5-3B-Instruct, Q4_K_M, Vulkan
+##   llama3.2-3b                     — Llama-3.2-3B-Instruct, Q4_K_M, Vulkan
 ##   deepseek-v4-flash-q8             — DeepSeek-V4-Flash MoE, Q8_0, CUDA (needs fused ops)
 
 set -euo pipefail
@@ -50,6 +52,20 @@ case "$MODEL_NAME" in
     CTX=256000
     EXTRA_FLAGS=(-b 128 -ub 128)
     ;;
+  qwen2.5-3b)
+    MODEL_FILE="$MODELS/qwen2.5-3b/qwen2.5-3b-instruct-q4_k_m.gguf"
+    MMPROJ=""
+    ALIAS="qwen2.5-3b"
+    CTX=32768
+    EXTRA_FLAGS=(-b 512 -ub 512)
+    ;;
+  llama3.2-3b)
+    MODEL_FILE="$MODELS/llama3.2-3b/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+    MMPROJ=""
+    ALIAS="llama3.2-3b"
+    CTX=32768
+    EXTRA_FLAGS=(-b 512 -ub 512)
+    ;;
   deepseek-v4-flash-q8)
     MODEL_FILE="$MODELS/DeepSeek-V4-Flash-Q8/Q8_0/DeepSeek-V4-Flash-Q8_0-00001-of-00007.gguf"
     MMPROJ=""
@@ -61,7 +77,7 @@ case "$MODEL_NAME" in
     ;;
   *)
     echo "Unknown model: $MODEL_NAME"
-    echo "Usage: $0 [qwen3.6-35b-a3b|qwen3.6-27b|deepseek-v4-flash-q8] [quant]"
+    echo "Usage: $0 [qwen3.6-35b-a3b|qwen3.6-27b|qwen2.5-3b|llama3.2-3b|deepseek-v4-flash-q8] [quant]"
     exit 1
     ;;
 esac

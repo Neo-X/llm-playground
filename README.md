@@ -4,9 +4,12 @@ This project benchmarks:
 - **Prompt (prefill) token speed** in tokens/sec
 - **Generation (decode) token speed** in tokens/sec
 
-Models configured for small GPU:
+Default model set (see `sweep_models.py`):
 - `qwen2.5:3b`
 - `llama3.2:3b`
+- `qwen3.6:27b`
+- `qwen3.6:35b-a3b`
+- `gpt-oss:20b`
 
 ## 0) Quick start
 
@@ -48,184 +51,51 @@ uv sync
 
 This uses `pyproject.toml` + `uv.lock` to recreate the same environment.
 
-## 3) Run benchmark (Transformers backend)
+## 3) Benchmark a set of models (Ollama + llama.cpp)
+
+One command benchmarks a list of models — pulling/unloading each Ollama model
+and, for models with a local GGUF (see `LLAMACPP_ALIASES` in `sweep_models.py`),
+launching `llama-server` via `launch_local_llm.sh` — then writes a combined CSV
+and a grouped bar-chart PNG comparing prefill/decode tok/s by backend:
 
 ```bash
-python benchmark_llm_speed.py
+uv run python sweep_models.py \
+  --models qwen2.5:3b llama3.2:3b qwen3.6:27b qwen3.6:35b-a3b gpt-oss:20b \
+  --runs 3 \
+  --out-csv logs/model_sweep.csv \
+  --out-png logs/model_sweep.png
 ```
 
-Useful options:
+Models without a known llama.cpp alias are benchmarked on Ollama only (a note
+is printed, the run isn't interrupted). Add new GGUF-backed models by adding
+them to `LLAMACPP_ALIASES` and to `launch_local_llm.sh`.
+
+For one-off, single-model, single-backend runs use `benchmark_llm_speed.py`
+directly — it supports `--backend transformers|ollama|llamacpp`:
 
 ```bash
-python benchmark_llm_speed.py \
-  --backend transformers \
-  --model Qwen/Qwen2.5-3B-Instruct \
-  --runs 5 \
-  --warmup 1 \
-  --max-new-tokens 128 \
-  --device auto
+# Transformers (HF) backend
+python benchmark_llm_speed.py --backend transformers --model Qwen/Qwen2.5-3B-Instruct --device auto
+
+# Ollama backend
+python benchmark_llm_speed.py --backend ollama --model qwen2.5:3b --ollama-pull
+
+# llama.cpp backend (expects launch_local_llm.sh already running)
+python benchmark_llm_speed.py --backend llamacpp --llamacpp-host http://localhost:8000 --model qwen3.6-27b
 ```
 
-Force GPU:
+## 4) Logs
 
-```bash
-python benchmark_llm_speed.py --device cuda
-```
-
-Force AMD GPU (ROCm-enabled PyTorch build):
-
-```bash
-python benchmark_llm_speed.py --device amd
-```
-
-Force CPU:
-
-```bash
-python benchmark_llm_speed.py --device cpu
-```
-
-Run on CPU then GPU with separate output files:
-
-```bash
-python benchmark_llm_speed.py \
-  --backend transformers \
-  --model Qwen/Qwen2.5-3B-Instruct \
-  --device cpu \
-  --no-load-in-4bit \
-  --runs 5 \
-  --warmup 1 \
-  --csv logs/benchmark_metrics_cpu.csv \
-  --jsonl logs/benchmark_metrics_cpu.jsonl \
-  --reset-output
-
-python benchmark_llm_speed.py \
-  --backend transformers \
-  --model Qwen/Qwen2.5-3B-Instruct \
-  --device cuda \
-  --runs 5 \
-  --warmup 1 \
-  --csv logs/benchmark_metrics_gpu.csv \
-  --jsonl logs/benchmark_metrics_gpu.jsonl \
-  --reset-output
-
-python benchmark_llm_speed.py \
-  --backend transformers \
-  --model Qwen/Qwen2.5-3B-Instruct \
-  --device amd \
-  --runs 5 \
-  --warmup 1 \
-  --csv logs/benchmark_metrics_amd.csv \
-  --jsonl logs/benchmark_metrics_amd.jsonl \
-  --reset-output
-```
-
-## 4) Run benchmark (Ollama backend)
-
-Start Ollama server if it is not running:
-
-```bash
-ollama serve
-```
-
-Benchmark using Ollama model:
-
-```bash
-python benchmark_llm_speed.py \
-  --backend ollama \
-  --model qwen2.5:3b \
-  --runs 5 \
-  --warmup 1 \
-  --max-new-tokens 128
-```
-
-Auto-pull model before running:
-
-```bash
-python benchmark_llm_speed.py \
-  --backend ollama \
-  --model qwen2.5:3b \
-  --ollama-pull
-```
-
-Use a non-default host:
-
-```bash
-python benchmark_llm_speed.py --backend ollama --ollama-host http://localhost:11434
-```
-
-## 5) Logs
-
-Metrics are appended to:
+Per-run metrics from `benchmark_llm_speed.py` are appended to:
 - `logs/benchmark_metrics.csv`
 - `logs/benchmark_metrics.jsonl`
 
-Columns include:
-- `backend`
-- `prompt_tokens`, `generated_tokens`
-- `prefill_time_s`, `decode_time_s`
-- `prefill_tps`, `decode_tps`
+Columns include `backend`, `prompt_tokens`, `generated_tokens`,
+`prefill_time_s`, `decode_time_s`, `prefill_tps`, `decode_tps`.
 
-## 6) Rank Ollama models (2+)
-
-Use the helper to benchmark 2 or more Ollama models and print a ranked table:
-
-```bash
-uv run python rank_ollama_models.py \
-  --models qwen2.5:3b llama3.2:3b glm-4.7-flash gpt-oss:20b gpt-oss:120b qwen3.5:latest mdq100/qwen3.5:27b-96g \
-  --runs 3 \
-  --warmup 1 \
-  --max-new-tokens 256 \
-  --rank-by decode \
-  --device rocm \
-  --ollama-pull \
-  --csv logs/benchmark_metrics_rocm.csv
-```
-
-Auto-pull models before benchmarking:
-
-```bash
-python rank_ollama_models.py \
-  --models qwen2.5:3b llama3.2:3b \
-  --ollama-pull \
-  --device cpu
-```
-
-Run the same ranking flow against an AMD GPU with Ollama's ROCm build:
-
-```bash
-python rank_ollama_models.py \
-  --models qwen2.5:3b llama3.2:3b \
-  --ollama-pull \
-  --device amd
-```
-
-Ranking outputs are saved to:
-- `logs/ollama_model_rankings.csv`
-
-## 7) Plot CPU vs accelerator benchmark results
-
-After producing `logs/benchmark_metrics_cpu.csv` and `logs/benchmark_metrics_cuda.csv`:
-
-```bash
-python plot_cpu_gpu_comparison.py \
-  --cpu-csv logs/benchmark_metrics_cpu.csv \
-  --cuda-csv logs/benchmark_metrics_cuda.csv \
-  --out-png logs/cpu_vs_cuda_speed.png
-```
-
-Add AMD GPU results to the same chart:
-
-```bash
-python plot_cpu_gpu_comparison.py \
-  --cpu-csv logs/benchmark_metrics_cpu.csv \
-  --cuda-csv logs/benchmark_metrics_cuda.csv \
-  --amd-csv logs/benchmark_metrics_amd.csv \
-  --out-png logs/cpu_cuda_amd_speed.png
-```
-
-`plot_cpu_gpu_comparison.py` supports either:
-- per-run benchmark CSV columns: `prefill_tps`, `decode_tps`
-- ranked-model CSV columns: `avg_prefill_tps`, `avg_decode_tps`
+`sweep_models.py` and `rank_ollama_models.py` write averaged, ranked results
+to `logs/model_sweep.csv` / `logs/ollama_model_rankings.csv` instead
+(columns: `backend`, `model`, `avg_prefill_tps`, `avg_decode_tps`, ...).
 
 ## Notes
 
@@ -236,7 +106,7 @@ python plot_cpu_gpu_comparison.py \
 
 ---
 
-## 8) llama.cpp benchmarking (Strix Halo / AMD iGPU)
+## 5) llama.cpp benchmarking (Strix Halo / AMD iGPU)
 
 For llama.cpp models, use **`llama-cpp-bencher.py`** from
 [lhl/strix-halo-testing](https://github.com/lhl/strix-halo-testing/tree/main/llm-bench).
@@ -335,7 +205,7 @@ Results are written to a directory named after the model stem:
 
 ---
 
-## 9) Sweep llama-server settings for prefill speed
+## 6) Sweep llama-server settings for prefill speed
 
 `bench_server_settings.py` starts llama-server with different `-b`/`-ub` batch
 sizes, sends fixed prompts of various lengths, and records prefill tok/s from
@@ -385,7 +255,7 @@ Results are written to `<model-stem>-server-settings/`:
 
 ---
 
-## 10) Using llama.cpp with OpenCode (opencode.ai)
+## 7) Using llama.cpp with OpenCode (opencode.ai)
 
 [OpenCode](https://opencode.ai/) is an open-source terminal/IDE coding agent that supports any OpenAI-compatible endpoint via `opencode.json`.
 
@@ -483,7 +353,7 @@ The function checks if a tunnel on port 11435 is already active before opening a
 
 ---
 
-## 11) Choosing models to benchmark
+## 8) Choosing models to benchmark
 
 Before downloading and running models locally, use [Artificial Analysis](https://artificialanalysis.ai/models/) to compare models across quality, speed, and context length. It covers both hosted APIs and open-weight models, making it a useful starting point for deciding which models are worth pulling for local inference.
 
@@ -494,3 +364,26 @@ Key things to check there:
 - **Open weights** — filter to models you can actually run locally
 
 Use this to narrow down candidates before spending time downloading multi-GB GGUF files.
+
+---
+
+## 9) Local model evaluations (text + vision regression tests)
+
+`tests/update_and_test_llama_image.py` pulls the llama.cpp Vulkan Docker image, starts it locally against each configured model, and runs opencode-based regression checks (README summarization + image transcription for vision-capable models). On success it promotes the image to the `known-good` tag used by `launch_local_llm.sh`.
+
+```bash
+uv run tests/update_and_test_llama_image.py
+```
+
+Useful options:
+
+```bash
+uv run tests/update_and_test_llama_image.py --skip-pull        # test the image already on disk
+uv run tests/update_and_test_llama_image.py --image <tag>      # test a specific image tag
+```
+
+For the remote (onyx) server instead, see `tests/update_and_test_remote_llm.py`:
+
+```bash
+uv run tests/update_and_test_remote_llm.py
+```
