@@ -74,10 +74,21 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def wait_for_llamacpp_server(host: str, timeout: int) -> None:
+def wait_for_llamacpp_server(host: str, timeout: int, process: subprocess.Popen, log_path: str) -> None:
     deadline = time.monotonic() + timeout
     url = f"{host.rstrip('/')}/health"
     while time.monotonic() < deadline:
+        if process.poll() is not None:
+            tail = ""
+            try:
+                with open(log_path, "r", encoding="utf-8", errors="replace") as handle:
+                    tail = "".join(handle.readlines()[-10:])
+            except OSError:
+                pass
+            raise RuntimeError(
+                f"launch_local_llm.sh exited (code {process.returncode}) before the server became "
+                f"healthy. Tail of {log_path}:\n{tail}"
+            )
         try:
             with urllib.request.urlopen(url, timeout=3) as response:
                 if response.status == 200:
@@ -143,7 +154,7 @@ def run_backend_for_model(
         print(f"  Launching llama-server for alias '{alias}'...")
         process = start_llamacpp_server(alias, log_path)
         try:
-            wait_for_llamacpp_server(args.llamacpp_host, args.llamacpp_ready_timeout)
+            wait_for_llamacpp_server(args.llamacpp_host, args.llamacpp_ready_timeout, process, log_path)
             for warmup_idx in range(args.warmup):
                 run_benchmark_llamacpp_server(
                     host=args.llamacpp_host, prompt=unique_prompt(args.prompt, f"warmup-{warmup_idx}"),
@@ -214,7 +225,11 @@ def main() -> None:
     for model in args.models:
         for backend in args.backends:
             print(f"=== {model} | {backend} ===")
-            summary = run_backend_for_model(backend=backend, model=model, args=args)
+            try:
+                summary = run_backend_for_model(backend=backend, model=model, args=args)
+            except Exception as exc:
+                print(f"  FAIL: {model} | {backend}: {exc}")
+                continue
             if summary is None:
                 continue
             rows.append({
