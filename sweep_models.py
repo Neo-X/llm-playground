@@ -32,6 +32,12 @@ LLAMACPP_ALIASES = {
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 
+def unique_prompt(prompt: str, nonce: str) -> str:
+    """Prepend a unique nonce so each call gets a distinct prefix, defeating
+    server-side prompt/context caching so prefill timing reflects real work."""
+    return f"[{nonce}] {prompt}"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Benchmark a list of models on Ollama and llama.cpp and plot the results."
@@ -106,19 +112,19 @@ def run_backend_for_model(
     if backend == "ollama":
         ollama_pull_model(args.ollama_host, model)
         device = resolve_ollama_device(args.device)
-        for _ in range(args.warmup):
+        for warmup_idx in range(args.warmup):
             run_benchmark_ollama(
-                host=args.ollama_host, model_name=model, prompt=args.prompt,
+                host=args.ollama_host, model_name=model, prompt=unique_prompt(args.prompt, f"warmup-{warmup_idx}"),
                 max_new_tokens=min(16, args.max_new_tokens), do_sample=False,
                 temperature=0.7, top_p=0.9, device=device,
             )
         runs = [
             run_benchmark_ollama(
-                host=args.ollama_host, model_name=model, prompt=args.prompt,
+                host=args.ollama_host, model_name=model, prompt=unique_prompt(args.prompt, f"run-{run_idx}"),
                 max_new_tokens=args.max_new_tokens, do_sample=False,
                 temperature=0.7, top_p=0.9, device=device,
             )
-            for _ in range(args.runs)
+            for run_idx in range(args.runs)
         ]
         ollama_unload_model(args.ollama_host, model)
     else:
@@ -133,19 +139,19 @@ def run_backend_for_model(
         process = start_llamacpp_server(alias, log_path)
         try:
             wait_for_llamacpp_server(args.llamacpp_host, args.llamacpp_ready_timeout)
-            for _ in range(args.warmup):
+            for warmup_idx in range(args.warmup):
                 run_benchmark_llamacpp_server(
-                    host=args.llamacpp_host, prompt=args.prompt,
+                    host=args.llamacpp_host, prompt=unique_prompt(args.prompt, f"warmup-{warmup_idx}"),
                     max_new_tokens=min(16, args.max_new_tokens), do_sample=False,
                     temperature=0.7, top_p=0.9,
                 )
             runs = [
                 run_benchmark_llamacpp_server(
-                    host=args.llamacpp_host, prompt=args.prompt,
+                    host=args.llamacpp_host, prompt=unique_prompt(args.prompt, f"run-{run_idx}"),
                     max_new_tokens=args.max_new_tokens, do_sample=False,
                     temperature=0.7, top_p=0.9,
                 )
-                for _ in range(args.runs)
+                for run_idx in range(args.runs)
             ]
         finally:
             stop_llamacpp_server(process)

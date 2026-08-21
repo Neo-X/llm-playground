@@ -131,21 +131,32 @@ so no separate build is needed.
 
 Use the `hf` CLI from this environment. Do **not** use `huggingface-cli` — it is not installed.
 
+**Quantization standard: use `UD-Q4_K_XL` (Unsloth Dynamic) for every llama.cpp GGUF download.**
+It's the quant `launch_local_llm.sh` defaults to for each model, and keeping every local
+GGUF on the same quant family makes speed comparisons across models (and against Ollama's
+default `Q4_K_M` pulls) meaningful — mixing quants (e.g. `Q8_0` vs `Q4_K_M`) skews decode
+tok/s because decode is memory-bandwidth-bound, not just backend/model dependent. If a repo
+doesn't publish `UD-Q4_K_XL`, fall back to plain `Q4_K_M` before reaching for anything else.
+
 ```bash
 # General pattern (run from this directory so uv picks up the correct venv)
 cd /home/gberseth/playground/llm-playground
 
 uv run hf download <repo_id> \
-  --include "<filename>.gguf" \
-  --local-dir /home/gberseth/playground/llama.cpp/models/<model-dir>
+  --include "<model-name>-UD-Q4_K_XL.gguf" \
+  --local-dir models/<model-dir>
 ```
 
-Example — Qwen3.6 35B-A3B MoE (UD-Q4_K_XL):
+Example — Qwen3.6 35B-A3B MoE:
 
 ```bash
-mkdir -p /home/gberseth/playground/llama.cpp/models/qwen3.6-35B-A3B
+uv run hf download unsloth/Qwen3.6-35B-A3B-GGUF --include "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf" --local-dir models/qwen3.6-35B-A3B
+```
 
-cd /home/gberseth/playground/llm-playground && uv run hf download unsloth/Qwen3.6-35B-A3B-GGUF --include "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf" --local-dir /home/gberseth/playground/llama.cpp/models/qwen3.6-35B-A3B
+Example — Qwen3.6 27B dense:
+
+```bash
+uv run hf download unsloth/Qwen3.6-27B-GGUF --include "Qwen3.6-27B-UD-Q4_K_XL.gguf" --local-dir models/qwen3.6-27b
 ```
 
 ### Run a benchmark

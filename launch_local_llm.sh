@@ -46,7 +46,7 @@ case "$MODEL_NAME" in
     EXTRA_FLAGS=(-b 128 -ub 128)
     ;;
   qwen3.6-27b)
-    QUANT=${2:-Q8_0}
+    QUANT=${2:-UD-Q4_K_XL}
     MODEL_FILE="$MODELS/qwen3.6-27b/Qwen3.6-27B-${QUANT}.gguf"
     MMPROJ="$MODELS/qwen3.6-27b/mmproj-F16.gguf"
     ALIAS="qwen3.6-27b"
