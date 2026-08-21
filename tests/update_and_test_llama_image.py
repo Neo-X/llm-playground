@@ -51,6 +51,12 @@ MODELS = [
         "alias": "qwen3.6-27b",
     },
     {
+        "name": "qwen3.8-27b",
+        "path": f"{MODELS_DIR}/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf",
+        "mmproj": f"{MODELS_DIR}/qwen3.8-27b/mmproj-F16.gguf",
+        "alias": "qwen3.8-27b",
+    },
+    {
         "name": "deepseek-v4-flash-q8",
         "path": f"{MODELS_DIR}/DeepSeek-V4-Flash-Q8/Q8_0/DeepSeek-V4-Flash-Q8_0-00001-of-00007.gguf",
         "mmproj": None,

@@ -17,6 +17,11 @@
           "name": "Qwen3.6 27B",
           "limit": { "context": 256000, "output": 8192 },
           "modalities": { "input": ["text", "image"], "output": ["text"] }
+        },
+        "qwen3.8-27b": {
+          "name": "Qwen3.8 27B",
+          "limit": { "context": 256000, "output": 8192 },
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
         }
       }
     },
@@ -48,6 +53,11 @@
         },
         "qwen3.6-27b": {
           "name": "Qwen3.6 27B (test)",
+          "limit": { "context": 32768, "output": 8192 },
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        },
+        "qwen3.8-27b": {
+          "name": "Qwen3.8 27B (test)",
           "limit": { "context": 32768, "output": 8192 },
           "modalities": { "input": ["text", "image"], "output": ["text"] }
         },
