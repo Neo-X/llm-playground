@@ -28,6 +28,7 @@
 ##   qwen2.5-3b                      — Qwen2.5-3B-Instruct, Q4_K_M
 ##   llama3.2-3b                     — Llama-3.2-3B-Instruct, Q4_K_M
 ##   deepseek-v4-flash-q8             — DeepSeek-V4-Flash MoE, Q8_0, CUDA (needs fused ops)
+##   qwen3.8-flash-next               — Qwen3.8-Flash-Next MoE, UD-Q4_K_XL (4 shards, ~111G)
 
 set -euo pipefail
 
@@ -111,9 +112,20 @@ case "$MODEL_NAME" in
     # single-file auto-download -- run `hf download` for it manually.
     HF_REPO=""
     ;;
+  qwen3.8-flash-next)
+    QUANT="UD-Q4_K_XL"
+    MODEL_DIR="$MODELS/qwen3.8-flash-next"
+    MODEL_FILE="$MODEL_DIR/$QUANT/Qwen3.8-Flash-Next-${QUANT}-00001-of-00004.gguf"
+    MMPROJ="$MODEL_DIR/mmproj-F16.gguf"
+    ALIAS="qwen3.8-flash-next"
+    CTX=256000
+    EXTRA_FLAGS=(-b 128 -ub 128)
+    HF_REPO="unsloth/Qwen3.8-Flash-Next-GGUF"
+    HF_INCLUDE="$QUANT/*"
+    ;;
   *)
     echo "Unknown model: $MODEL_NAME"
-    echo "Usage: $0 [qwen3.6-35b-a3b|qwen3.6-27b|qwen3.8-27b|qwen2.5-3b|llama3.2-3b|deepseek-v4-flash-q8] [quant]"
+    echo "Usage: $0 [qwen3.6-35b-a3b|qwen3.6-27b|qwen3.8-27b|qwen2.5-3b|llama3.2-3b|deepseek-v4-flash-q8|qwen3.8-flash-next] [quant]"
     exit 1
     ;;
 esac
@@ -142,7 +154,31 @@ maybe_download() {
   HF_XET_HIGH_PERFORMANCE=1 hf download "$HF_REPO" "$(basename "$file_path")" --local-dir "$(dirname "$file_path")"
 }
 
-maybe_download "$MODEL_FILE"
+maybe_download_sharded() {
+  local check_file="$1" include_pattern="$2" local_dir="$3"
+  [[ -f "$check_file" ]] && return 0
+
+  if [[ ! -t 0 ]]; then
+    echo "Model shards not found: $check_file (repo: $HF_REPO, pattern: $include_pattern). Not prompting -- stdin isn't a terminal." >&2
+    exit 1
+  fi
+
+  local answer
+  read -r -p "Model shards not found: $check_file. Download '$include_pattern' from $HF_REPO now? [y/N] " answer || answer="n"
+  if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+    echo "Not downloading. Exiting." >&2
+    exit 1
+  fi
+
+  echo "Downloading '$include_pattern' from $HF_REPO..."
+  HF_XET_HIGH_PERFORMANCE=1 hf download "$HF_REPO" --include "$include_pattern" --local-dir "$local_dir"
+}
+
+if [[ -n "${HF_INCLUDE:-}" ]]; then
+  maybe_download_sharded "$MODEL_FILE" "$HF_INCLUDE" "$MODEL_DIR"
+else
+  maybe_download "$MODEL_FILE"
+fi
 [[ -n "$MMPROJ" ]] && maybe_download "$MMPROJ"
 
 MMPROJ_FLAGS=()
