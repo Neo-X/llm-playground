@@ -118,8 +118,10 @@ case "$MODEL_NAME" in
     MODEL_FILE="$MODEL_DIR/$QUANT/Qwen3.8-Flash-Next-${QUANT}-00001-of-00004.gguf"
     MMPROJ="$MODEL_DIR/mmproj-F16.gguf"
     ALIAS="qwen3.8-flash-next"
-    CTX=256000
-    EXTRA_FLAGS=(-b 128 -ub 128)
+    CTX=512000
+    # Native training context is 262144 -- CTX exceeds that, so YaRN rope
+    # scaling is needed to extend it correctly (per the model card).
+    EXTRA_FLAGS=(-b 128 -ub 128 --rope-scaling yarn --rope-scale 2 --yarn-orig-ctx 262144)
     HF_REPO="unsloth/Qwen3.8-Flash-Next-GGUF"
     HF_INCLUDE="$QUANT/*"
     ;;
