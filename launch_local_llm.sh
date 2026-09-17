@@ -214,10 +214,10 @@ set +e
 docker run --rm --name "$CONTAINER_NAME" \
   "${GPU_FLAGS[@]}" \
   -v "$MODELS:$MODELS" \
-  -p 8000:8000 \
+  -p 8010:8010 \
   "$IMAGE" \
   -m "$MODEL_FILE" --alias "$ALIAS" "${MMPROJ_FLAGS[@]}" \
-  -ngl 999 --load-mode none --ctx-size "$CTX" --host 0.0.0.0 --port 8000 --jinja \
+  -ngl 999 --load-mode none --ctx-size "$CTX" --host 0.0.0.0 --port 8010 --jinja \
   --cache-type-k q8_0 --cache-type-v q8_0 "${EXTRA_FLAGS[@]}"
 status=$?
 set -e
