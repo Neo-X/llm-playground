@@ -1,22 +1,41 @@
 #!/bin/bash
-## Launch a local LLM server via llama-server, using official ggml-org
-## llama.cpp images.
+## Launch a local LLM server, using either llama-server (llama.cpp) or
+## vLLM's OpenAI-compatible server, both via docker.
 ##
-## Two backends, auto-selected by GPU hardware:
-##   - Onyx (4x Nvidia GPUs): docker run using the official
-##     ghcr.io/ggml-org/llama.cpp CUDA image by default (this machine's dev
-##     container is CUDA-based, so native CUDA kernels are used rather than
-##     Vulkan). Use tests/update_and_test_llama_image.py to pull/test new
-##     Vulkan image builds; it promotes tested images to the
+## Three backends:
+##   - BACKEND=docker (auto-selected on Onyx, 4x Nvidia GPUs): llama-server
+##     via the official ghcr.io/ggml-org/llama.cpp CUDA image (this
+##     machine's dev container is CUDA-based, so native CUDA kernels are
+##     used rather than Vulkan). Use tests/update_and_test_llama_image.py to
+##     pull/test new Vulkan image builds; it promotes tested images to the
 ##     "vulkan-known-good" tag, which LLAMA_IMAGE can still select.
-##   - AMD laptop (Strix Halo iGPU, no Nvidia): the existing
-##     "llama-vulkan-radv" distrobox container (see setup_llm_distrobox.sh),
-##     entered directly with distrobox enter. Vulkan there since there's no
-##     CUDA-capable GPU.
+##   - BACKEND=distrobox (auto-selected on the AMD laptop, Strix Halo iGPU,
+##     no Nvidia): llama-server in the existing "llama-vulkan-radv"
+##     distrobox container (see setup_llm_distrobox.sh), entered directly
+##     with distrobox enter. Vulkan there since there's no CUDA-capable GPU.
+##   - BACKEND=vllm (opt-in only, never auto-selected): vLLM's
+##     OpenAI-compatible server via the official vllm/vllm-openai docker
+##     image (https://docs.vllm.ai/en/stable/deployment/docker/), loading
+##     the same local GGUF file as the llama.cpp backends via vLLM's
+##     experimental GGUF loader (vllm-gguf-plugin). Use this when you want
+##     continuous batching / PagedAttention for many concurrent users or
+##     agents hitting the server at once -- llama-server serves requests
+##     with much less request-level concurrency. Onyx (Nvidia) only; not
+##     every model alias supports it (see VLLM_SUPPORTED below -- sharded
+##     GGUFs aren't supported by vLLM's GGUF loader).
+##     KNOWN ISSUE (2026-09-20, vllm-gguf-plugin 0.0.5): qwen3.6-35b-a3b,
+##     qwen3.6-27b, and qwen3.8-27b fail with "Unknown gguf model_type:
+##     qwen3_5" -- the plugin has no GGUF->HF weight name mapping yet for
+##     this architecture. qwen2.5-3b is confirmed working. Re-test after a
+##     plugin upgrade.
 ##
-## Set LLAMA_IMAGE to override the docker image on either backend.
+## Set LLAMA_IMAGE to override the docker image for the llama.cpp backends.
+## Set VLLM_IMAGE to override the vLLM docker image (default vllm/vllm-openai:latest).
+## Set TP to override vLLM's --tensor-parallel-size (default 1 -- GGUF+TP>1
+## is undocumented/untested upstream, so this only opts in explicitly).
+## Set HF_TOKEN for gated tokenizer repos (e.g. Llama) with the vllm backend.
 ##
-## Set BACKEND=docker or BACKEND=distrobox to override auto-detection.
+## Set BACKEND=docker, BACKEND=distrobox, or BACKEND=vllm to override auto-detection.
 ##
 ## Usage: ./launch_local_llm.sh [model] [quant]
 ##
@@ -35,12 +54,15 @@ set -euo pipefail
 MODELS=/home/gberseth/playground/llm-playground/models
 VULKAN_IMAGE=ghcr.io/ggml-org/llama.cpp:server-vulkan-known-good
 CUDA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda
+VLLM_IMAGE=${VLLM_IMAGE:-vllm/vllm-openai:latest}
+VLLM_GGUF_IMAGE=vllm-openai-gguf:local
 DISTROBOX_CONTAINER=llama-vulkan-radv
 MODEL_NAME=${1:-qwen3.6-35b-a3b}
 
 # Auto-detect backend: onyx has 4 Nvidia GPUs and uses the docker server
 # (CUDA image, this machine's dev container); the AMD laptop (Strix Halo
 # iGPU, no nvidia-smi) uses the old distrobox container (Vulkan) instead.
+# BACKEND=vllm is never auto-selected -- opt in explicitly.
 if [[ -z "${BACKEND:-}" ]]; then
   if command -v nvidia-smi >/dev/null 2>&1 && [[ "$(nvidia-smi -L | wc -l)" -eq 4 ]]; then
     BACKEND=docker
@@ -52,11 +74,14 @@ fi
 if [[ "$BACKEND" == "docker" ]]; then
   IMAGE=${LLAMA_IMAGE:-$CUDA_IMAGE}
   CONTAINER_NAME=llama-cuda-server
+elif [[ "$BACKEND" == "vllm" ]]; then
+  CONTAINER_NAME=vllm-server
 else
   IMAGE=${LLAMA_IMAGE:-$VULKAN_IMAGE}
   CONTAINER_NAME=llama-vulkan-server
 fi
 
+VLLM_SUPPORTED=0
 case "$MODEL_NAME" in
   qwen3.6-35b-a3b)
     QUANT=${2:-UD-Q4_K_XL}
@@ -66,6 +91,9 @@ case "$MODEL_NAME" in
     CTX=256000
     EXTRA_FLAGS=(-b 128 -ub 128)
     HF_REPO="unsloth/Qwen3.6-35B-A3B-GGUF"
+    TOKENIZER_REPO="Qwen/Qwen3.6-35B-A3B"
+    TOOL_PARSER="hermes"
+    VLLM_SUPPORTED=1
     ;;
   qwen3.6-27b)
     QUANT=${2:-UD-Q4_K_XL}
@@ -75,6 +103,9 @@ case "$MODEL_NAME" in
     CTX=256000
     EXTRA_FLAGS=(-b 128 -ub 128)
     HF_REPO="unsloth/Qwen3.6-27B-GGUF"
+    TOKENIZER_REPO="Qwen/Qwen3.6-27B"
+    TOOL_PARSER="hermes"
+    VLLM_SUPPORTED=1
     ;;
   qwen3.8-27b)
     QUANT=${2:-UD-Q4_K_XL}
@@ -84,6 +115,9 @@ case "$MODEL_NAME" in
     CTX=256000
     EXTRA_FLAGS=(-b 128 -ub 128)
     HF_REPO="unsloth/Qwen3.8-27B-GGUF"
+    TOKENIZER_REPO="Qwen/Qwen3.8-27B"
+    TOOL_PARSER="hermes"
+    VLLM_SUPPORTED=1
     ;;
   qwen2.5-3b)
     MODEL_FILE="$MODELS/qwen2.5-3b/qwen2.5-3b-instruct-q4_k_m.gguf"
@@ -92,6 +126,9 @@ case "$MODEL_NAME" in
     CTX=32768
     EXTRA_FLAGS=(-b 512 -ub 512)
     HF_REPO="Qwen/Qwen2.5-3B-Instruct-GGUF"
+    TOKENIZER_REPO="Qwen/Qwen2.5-3B-Instruct"
+    TOOL_PARSER="hermes"
+    VLLM_SUPPORTED=1
     ;;
   llama3.2-3b)
     MODEL_FILE="$MODELS/llama3.2-3b/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
@@ -100,6 +137,9 @@ case "$MODEL_NAME" in
     CTX=32768
     EXTRA_FLAGS=(-b 512 -ub 512)
     HF_REPO="bartowski/Llama-3.2-3B-Instruct-GGUF"
+    TOKENIZER_REPO="meta-llama/Llama-3.2-3B-Instruct"
+    TOOL_PARSER="llama3_json"
+    VLLM_SUPPORTED=1
     ;;
   deepseek-v4-flash-q8)
     MODEL_FILE="$MODELS/DeepSeek-V4-Flash-Q8/Q8_0/DeepSeek-V4-Flash-Q8_0-00001-of-00007.gguf"
@@ -196,6 +236,57 @@ if [[ "$BACKEND" == "distrobox" ]]; then
   exit 0
 fi
 
+if [[ "$BACKEND" == "vllm" ]]; then
+  if [[ "$VLLM_SUPPORTED" -ne 1 ]]; then
+    echo "Model '$MODEL_NAME' isn't supported on BACKEND=vllm -- it's a sharded/multi-file GGUF, and vLLM's GGUF loader only supports single-file checkpoints." >&2
+    exit 1
+  fi
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    echo "BACKEND=vllm requires an Nvidia GPU (vLLM's CUDA image) -- none detected." >&2
+    exit 1
+  fi
+
+  # vLLM's official image doesn't ship GGUF support -- build a thin local
+  # layer adding vllm-gguf-plugin on top of it (see
+  # https://docs.vllm.ai/en/stable/features/quantization/gguf.html), cached
+  # by image tag so this only runs once per VLLM_IMAGE version.
+  if ! docker image inspect "$VLLM_GGUF_IMAGE" >/dev/null 2>&1; then
+    echo "Building '$VLLM_GGUF_IMAGE' (one-time: $VLLM_IMAGE + vllm-gguf-plugin)..."
+    printf '%s\n' "FROM $VLLM_IMAGE" "RUN pip install --no-cache-dir vllm-gguf-plugin" \
+      | docker build -t "$VLLM_GGUF_IMAGE" -
+  fi
+
+  TP=${TP:-1}
+  HF_TOKEN_FLAGS=()
+  [[ -n "${HF_TOKEN:-}" ]] && HF_TOKEN_FLAGS=(--env "HF_TOKEN=$HF_TOKEN")
+
+  echo "Using docker image '$VLLM_GGUF_IMAGE' as container '$CONTAINER_NAME' (onyx Nvidia backend)"
+  echo "Model file: $MODEL_FILE | tokenizer: $TOKENIZER_REPO | tensor-parallel-size: $TP | max-model-len: $CTX"
+
+  docker rm -f vllm-server llama-vulkan-server llama-cuda-server >/dev/null 2>&1 || true
+
+  set +e
+  docker run --rm --name "$CONTAINER_NAME" \
+    --runtime nvidia --gpus all --ipc=host \
+    -v "$MODELS:$MODELS" \
+    -v ~/.cache/huggingface:/root/.cache/huggingface \
+    "${HF_TOKEN_FLAGS[@]}" \
+    -p 8020:8000 \
+    "$VLLM_GGUF_IMAGE" \
+    --model "$MODEL_FILE" --tokenizer "$TOKENIZER_REPO" --served-model-name "$ALIAS" \
+    --tensor-parallel-size "$TP" --max-model-len "$CTX" --gpu-memory-utilization 0.90 \
+    --enable-auto-tool-choice --tool-call-parser "$TOOL_PARSER"
+  status=$?
+  set -e
+
+  if [[ $status -ne 0 ]]; then
+    echo "vLLM container '$CONTAINER_NAME' exited with code $status -- see output above for the crash reason." >&2
+  else
+    echo "vLLM container '$CONTAINER_NAME' exited normally (code 0)."
+  fi
+  exit "$status"
+fi
+
 echo "Using docker image '$IMAGE' as container '$CONTAINER_NAME' (onyx 4x Nvidia backend)"
 
 GPU_FLAGS=(--device /dev/dri)
@@ -205,7 +296,7 @@ for group in render video; do
 done
 command -v nvidia-smi >/dev/null 2>&1 && GPU_FLAGS+=(--gpus all)
 
-docker rm -f llama-vulkan-server llama-cuda-server >/dev/null 2>&1 || true
+docker rm -f llama-vulkan-server llama-cuda-server vllm-server >/dev/null 2>&1 || true
 
 # Runs attached (no -d), so all llama-server output stays in this terminal and
 # the shell blocks here until the container exits. If it exits early (crash,

@@ -25,6 +25,23 @@
         }
       }
     },
+    "vllm": {
+      "name": "vLLM (local)",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://localhost:8020/v1"
+      },
+      "models": {
+        "qwen2.5-3b": {
+          "name": "Qwen2.5 3B (vLLM)",
+          "limit": { "context": 32768, "output": 8192 }
+        },
+        "llama3.2-3b": {
+          "name": "Llama 3.2 3B (vLLM, needs HF_TOKEN)",
+          "limit": { "context": 32768, "output": 8192 }
+        }
+      }
+    },
     "llama-cpp-onyx": {
       "name": "llama.cpp (onyx)",
       "npm": "@ai-sdk/openai-compatible",

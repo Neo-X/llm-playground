@@ -310,6 +310,99 @@ def run_benchmark_llamacpp_server(
     }
 
 
+def run_benchmark_vllm_server(
+    host: str,
+    model_name: str,
+    prompt: str,
+    max_new_tokens: int,
+    do_sample: bool,
+    temperature: float,
+    top_p: float,
+) -> dict:
+    """Benchmark a model served by vLLM's OpenAI-compatible server (see
+    launch_vllm.sh), streaming /v1/completions to derive prefill (time to
+    first token) and decode timings -- vLLM's OpenAI API doesn't report
+    prefill/decode durations directly the way llama.cpp's /completion does."""
+    payload = {
+        "model": model_name,
+        "prompt": prompt,
+        "max_tokens": max_new_tokens,
+        "temperature": temperature if do_sample else 0.0,
+        "top_p": top_p,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    url = f"{host.rstrip('/')}/v1/completions"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    start = time.perf_counter()
+    first_token_time = None
+    generated_text_parts: list[str] = []
+    usage: dict = {}
+    try:
+        with urllib.request.urlopen(req, timeout=600) as response:
+            for raw_line in response:
+                line = raw_line.decode("utf-8", errors="ignore").strip()
+                if not line.startswith("data:"):
+                    continue
+                data_str = line[len("data:"):].strip()
+                if data_str == "[DONE]":
+                    break
+                chunk = json.loads(data_str)
+                choices = chunk.get("choices") or []
+                if choices:
+                    text = choices[0].get("text", "")
+                    if text:
+                        if first_token_time is None:
+                            first_token_time = time.perf_counter()
+                        generated_text_parts.append(text)
+                if chunk.get("usage"):
+                    usage = chunk["usage"]
+    except urllib.error.HTTPError as exc:
+        error_body = ""
+        try:
+            error_body = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            error_body = ""
+        raise RuntimeError(
+            f"vLLM server request failed ({exc.code}) at {url}. Response: {error_body or exc.reason}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(
+            f"Failed to reach vLLM server at {url}. Is it running? (see launch_vllm.sh)"
+        ) from exc
+
+    end = time.perf_counter()
+    if first_token_time is None:
+        first_token_time = end
+
+    prefill_time_s = first_token_time - start
+    decode_time_s = max(end - first_token_time, 1e-9)
+    prompt_tokens = int(usage.get("prompt_tokens", 0))
+    generated_tokens = int(usage.get("completion_tokens", len(generated_text_parts)))
+
+    prefill_tps = (prompt_tokens / prefill_time_s) if prefill_time_s > 0 else 0.0
+    # The first generated token's latency is already counted in prefill_time_s
+    # (that's what "time to first token" means), so decode throughput is over
+    # the remaining tokens only.
+    decode_tps = ((generated_tokens - 1) / decode_time_s) if generated_tokens > 1 else 0.0
+
+    return {
+        "prompt_tokens": prompt_tokens,
+        "generated_tokens": generated_tokens,
+        "prefill_time_s": prefill_time_s,
+        "decode_time_s": decode_time_s,
+        "prefill_tps": prefill_tps,
+        "decode_tps": decode_tps,
+        "generated_text": "".join(generated_text_parts),
+    }
+
+
 def run_benchmark_ollama(
     host: str,
     model_name: str,
@@ -449,7 +542,7 @@ def parse_args() -> argparse.Namespace:
         "--backend",
         type=str,
         default="transformers",
-        choices=["transformers", "ollama", "llamacpp"],
+        choices=["transformers", "ollama", "llamacpp", "vllm"],
         help="Inference backend to benchmark.",
     )
     parser.add_argument(
@@ -471,6 +564,12 @@ def parse_args() -> argparse.Namespace:
             "URL of a running llama.cpp `llama-server` instance (see launch_local_llm.sh, "
             "which serves models via docker/distrobox)."
         ),
+    )
+    parser.add_argument(
+        "--vllm-host",
+        type=str,
+        default="http://localhost:8020",
+        help="URL of a running vLLM OpenAI-compatible server (see launch_vllm.sh).",
     )
     parser.add_argument(
         "--prompt",

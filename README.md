@@ -277,7 +277,60 @@ Results are written to `<model-stem>-server-settings/`:
 
 ---
 
-## 7) Using llama.cpp with OpenCode (opencode.ai)
+## 7) Serving with vLLM (multi-user / multi-agent concurrency)
+
+`llama-server` handles concurrent requests, but vLLM's continuous batching +
+PagedAttention scales much better when many users or agent sessions hit the
+server at once. `launch_local_llm.sh` supports it as a third backend,
+reusing the same model aliases and local GGUF files as the llama.cpp
+backends -- it loads them via vLLM's experimental GGUF loader
+(`vllm-gguf-plugin`) instead of downloading separate safetensors weights.
+
+```bash
+BACKEND=vllm ./launch_local_llm.sh qwen2.5-3b
+```
+
+Verified working (2026-09-20, `vllm/vllm-openai:latest` v0.29.0 +
+`vllm-gguf-plugin` 0.0.5): `qwen2.5-3b` -- came up on port 8020 and served a
+real completion. `llama3.2-3b` should work the same way but needs `HF_TOKEN`
+(untested here since none was configured).
+
+**Known limitation:** `qwen3.6-35b-a3b`, `qwen3.6-27b`, and `qwen3.8-27b`
+currently **fail** on this backend --
+`RuntimeError: Unknown gguf model_type: qwen3_5` -- because
+`vllm-gguf-plugin` 0.0.5 doesn't yet have a GGUF-to-HF weight name mapping
+for the `qwen3_5` architecture these GGUFs use. This is an upstream plugin
+gap, not fixable from this repo; re-test after a `vllm-gguf-plugin` upgrade,
+or switch that alias's `MODEL_FILE`/`TOKENIZER_REPO` pair to point at the
+model's bf16 safetensors repo (e.g. `Qwen/Qwen3.8-27B`) via vLLM's native
+(non-GGUF) loader instead, which doesn't hit this bug -- at the cost of a
+much larger download.
+
+Notes:
+- Onyx (Nvidia) only -- there's no Vulkan/AMD path for vLLM here.
+- Not every alias supports it: sharded GGUFs (`qwen3.8-flash-next`,
+  `deepseek-v4-flash-q8`) aren't supported by vLLM's GGUF loader, which
+  only handles single-file checkpoints.
+- First run builds a small local image (`vllm-openai-gguf:local`) on top of
+  the official `vllm/vllm-openai:latest` image, adding `vllm-gguf-plugin`.
+  Cached after that.
+- Serves the OpenAI-compatible API on **port 8020** (llama.cpp uses 8010
+  docker / 8000 distrobox, so all three can run side by side).
+- Defaults to `--tensor-parallel-size 1`. Set `TP=2` (etc.) to span more
+  GPUs -- GGUF + tensor-parallel is undocumented upstream, so treat higher
+  values as experimental.
+- Set `HF_TOKEN` for gated tokenizer repos (e.g. the `llama3.2-3b` alias
+  uses `meta-llama/Llama-3.2-3B-Instruct`'s tokenizer).
+
+Benchmark it the same way as the other backends:
+
+```bash
+uv run python benchmark_llm_speed.py --backend vllm --vllm-host http://localhost:8020 --model qwen2.5-3b
+```
+
+---
+
+## 8) Using llama.cpp with OpenCode (opencode.ai)
 
 [OpenCode](https://opencode.ai/) is an open-source terminal/IDE coding agent that supports any OpenAI-compatible endpoint via `opencode.json`.
 
@@ -375,7 +428,7 @@ The function checks if a tunnel on port 11435 is already active before opening a
 
 ---
 
-## 8) Choosing models to benchmark
+## 9) Choosing models to benchmark
 
 Before downloading and running models locally, use [Artificial Analysis](https://artificialanalysis.ai/models/) to compare models across quality, speed, and context length. It covers both hosted APIs and open-weight models, making it a useful starting point for deciding which models are worth pulling for local inference.
 
@@ -389,7 +442,7 @@ Use this to narrow down candidates before spending time downloading multi-GB GGU
 
 ---
 
-## 9) Local model evaluations (text + vision regression tests)
+## 10) Local model evaluations (text + vision regression tests)
 
 `tests/update_and_test_llama_image.py` pulls the llama.cpp Vulkan Docker image, starts it locally against each configured model, and runs opencode-based regression checks (README summarization + image transcription for vision-capable models). On success it promotes the image to the `known-good` tag used by `launch_local_llm.sh`.
 

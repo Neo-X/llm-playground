@@ -4,5 +4,6 @@ logs/
 .venv/
 .claude/
 .env
-
+*/__pycache__/*
+__pycache__/*
 models/*
