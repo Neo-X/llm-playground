@@ -14,11 +14,11 @@ port 8020, sends it a direct /v1/completions request, and then runs the
 same opencode-based README-summarization regression check the llama.cpp
 tests use, against the "vllm" provider (see opencode.json).
 
-Only qwen2.5-3b is exercised here. As of 2026-09-20, qwen3.6-35b-a3b,
-qwen3.6-27b, and qwen3.8-27b all fail under this backend with
-"Unknown gguf model_type: qwen3_5" -- vllm-gguf-plugin doesn't yet support
-that GGUF architecture (see the KNOWN ISSUE note in launch_local_llm.sh).
-llama3.2-3b needs a gated HF_TOKEN, so it isn't included by default either.
+qwen2.5-3b and qwen3.8-27b are exercised here. qwen3.6-35b-a3b/qwen3.6-27b
+use the same qwen3_5 GGUF architecture as qwen3.8-27b (see the plugin-pin
+note in launch_local_llm.sh) so they're expected to work too but aren't
+included, to keep this test's runtime down. llama3.2-3b needs a gated
+HF_TOKEN, so it isn't included by default either.
 
 Usage:
     uv run tests/update_and_test_vllm_image.py
@@ -51,6 +51,11 @@ MODELS = [
         "name": "qwen2.5-3b",
         "path": f"{MODELS_DIR}/qwen2.5-3b/qwen2.5-3b-instruct-q4_k_m.gguf",
         "alias": "qwen2.5-3b",
+    },
+    {
+        "name": "qwen3.8-27b",
+        "path": f"{MODELS_DIR}/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf",
+        "alias": "qwen3.8-27b",
     },
 ]
 

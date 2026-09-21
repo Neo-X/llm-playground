@@ -290,30 +290,32 @@ backends -- it loads them via vLLM's experimental GGUF loader
 BACKEND=vllm ./launch_local_llm.sh qwen2.5-3b
 ```
 
-Verified working (2026-09-20, `vllm/vllm-openai:latest` v0.29.0 +
-`vllm-gguf-plugin` 0.0.5): `qwen2.5-3b` -- came up on port 8020 and served a
-real completion. `llama3.2-3b` should work the same way but needs `HF_TOKEN`
-(untested here since none was configured).
+Verified working (2026-09-21, `vllm/vllm-openai:latest` v0.29.0): `qwen2.5-3b`
+and `qwen3.8-27b` -- both came up on port 8020 and served real completions.
+`qwen3.6-35b-a3b`/`qwen3.6-27b` use the same `qwen3_5` GGUF architecture as
+`qwen3.8-27b` so they're expected to work too (not individually re-tested).
+`llama3.2-3b` should work the same way but needs `HF_TOKEN` (untested here
+since none was configured).
 
-**Known limitation:** `qwen3.6-35b-a3b`, `qwen3.6-27b`, and `qwen3.8-27b`
-currently **fail** on this backend --
-`RuntimeError: Unknown gguf model_type: qwen3_5` -- because
-`vllm-gguf-plugin` 0.0.5 doesn't yet have a GGUF-to-HF weight name mapping
-for the `qwen3_5` architecture these GGUFs use. This is an upstream plugin
-gap, not fixable from this repo; re-test after a `vllm-gguf-plugin` upgrade,
-or switch that alias's `MODEL_FILE`/`TOKENIZER_REPO` pair to point at the
-model's bf16 safetensors repo (e.g. `Qwen/Qwen3.8-27B`) via vLLM's native
-(non-GGUF) loader instead, which doesn't hit this bug -- at the cost of a
-much larger download.
+**Past issue, now fixed:** `qwen3.6-35b-a3b`/`qwen3.6-27b`/`qwen3.8-27b`
+used to fail with `RuntimeError: Unknown gguf model_type: qwen3_5`, because
+the `vllm-gguf-plugin` 0.0.5 PyPI wheel has no GGUF-to-HF weight name mapping
+for the `qwen3_5` architecture these GGUFs use. The fix (PR #98) merged to
+the plugin's GitHub `main` on 2026-08-18, after the 0.0.5 release, so the
+image now installs the plugin from git pinned to that merge commit
+(`VLLM_GGUF_PLUGIN_REF` in `launch_local_llm.sh`) instead of the PyPI wheel.
+Bump `VLLM_GGUF_PLUGIN_REF` to a version tag once a PyPI release ships past
+0.0.5 with this fix.
 
 Notes:
 - Onyx (Nvidia) only -- there's no Vulkan/AMD path for vLLM here.
 - Not every alias supports it: sharded GGUFs (`qwen3.8-flash-next`,
   `deepseek-v4-flash-q8`) aren't supported by vLLM's GGUF loader, which
   only handles single-file checkpoints.
-- First run builds a small local image (`vllm-openai-gguf:local`) on top of
-  the official `vllm/vllm-openai:latest` image, adding `vllm-gguf-plugin`.
-  Cached after that.
+- First run builds a small local image (tagged by the plugin commit it
+  pins, e.g. `vllm-openai-gguf:4ec8d61565cb`) on top of the official
+  `vllm/vllm-openai:latest` image. Cached after that; bumping
+  `VLLM_GGUF_PLUGIN_REF` changes the tag and triggers a rebuild.
 - Serves the OpenAI-compatible API on **port 8020** (llama.cpp uses 8010
   docker / 8000 distrobox, so all three can run side by side).
 - Defaults to `--tensor-parallel-size 1`. Set `TP=2` (etc.) to span more
@@ -405,6 +407,33 @@ opencode
 Select **Ollama on remote › \<model\>** from the model picker.
 
 > **Note:** Ollama on the remote server is available but noticeably slower than llama.cpp. Use llama.cpp for performance-critical work and Ollama for convenience or models not yet available in GGUF format.
+
+### Using OpenCode with vLLM on remote (SSH tunnel)
+
+Same idea as the Ollama tunnel above, for the `BACKEND=vllm` server (see section 7). No separate ssh alias needed -- one ssh connection can carry multiple `LocalForward`s, so just add a second line to your existing `<REMOTE_HOST>-llamacpp` `~/.ssh/config` entry:
+
+```
+Host <REMOTE_HOST>-llamacpp
+  HostName <REMOTE_HOST>
+  LocalForward 8001 localhost:8000
+  LocalForward 8020 localhost:8020
+```
+
+**Step 1 — open the tunnel and launch vLLM remotely** (keep this terminal running):
+
+```bash
+BACKEND=vllm ./connect-remote-llm.sh qwen3.8-27b
+```
+
+This renews your Kerberos ticket, starts the SSH port-forwards (llama-server + vLLM over the `-llamacpp` connection, Ollama over `-ollama`), and launches `BACKEND=vllm launch_local_llm.sh qwen3.8-27b` in the background on the remote host.
+
+**Step 2 — run OpenCode** in another terminal:
+
+```bash
+opencode
+```
+
+Select **vLLM (local) › Qwen3.8 27B (vLLM)** from the model picker (it connects to `http://127.0.0.1:8020/v1` via the tunnel, same `opencode.json` provider used locally).
 
 ### Using the `ollama-remote` helper
 

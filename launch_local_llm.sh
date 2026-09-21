@@ -23,11 +23,13 @@
 ##     with much less request-level concurrency. Onyx (Nvidia) only; not
 ##     every model alias supports it (see VLLM_SUPPORTED below -- sharded
 ##     GGUFs aren't supported by vLLM's GGUF loader).
-##     KNOWN ISSUE (2026-09-20, vllm-gguf-plugin 0.0.5): qwen3.6-35b-a3b,
-##     qwen3.6-27b, and qwen3.8-27b fail with "Unknown gguf model_type:
-##     qwen3_5" -- the plugin has no GGUF->HF weight name mapping yet for
-##     this architecture. qwen2.5-3b is confirmed working. Re-test after a
-##     plugin upgrade.
+##     qwen3.6-35b-a3b/qwen3.6-27b/qwen3.8-27b need vllm-gguf-plugin's
+##     qwen3_5 weight-name-mapping fix (PR #98, merged 2026-08-18), which
+##     landed on GitHub main *after* the last PyPI release (0.0.5,
+##     2026-08-10) -- so the image installs the plugin pinned to that PR's
+##     merge commit (VLLM_GGUF_PLUGIN_REF below) instead of the PyPI wheel.
+##     Bump VLLM_GGUF_PLUGIN_REF to a PyPI version once one ships past 0.0.5.
+##     Verified working end-to-end (2026-09-21): qwen3.8-27b, qwen2.5-3b.
 ##
 ## Set LLAMA_IMAGE to override the docker image for the llama.cpp backends.
 ## Set VLLM_IMAGE to override the vLLM docker image (default vllm/vllm-openai:latest).
@@ -55,7 +57,11 @@ MODELS=/home/gberseth/playground/llm-playground/models
 VULKAN_IMAGE=ghcr.io/ggml-org/llama.cpp:server-vulkan-known-good
 CUDA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda
 VLLM_IMAGE=${VLLM_IMAGE:-vllm/vllm-openai:latest}
-VLLM_GGUF_IMAGE=vllm-openai-gguf:local
+# Pinned to the vllm-gguf-plugin commit that merged qwen3_5 GGUF support
+# (PR #98) -- not yet on a PyPI release (latest is 0.0.5). The image tag
+# bakes in the ref so bumping it below forces a rebuild automatically.
+VLLM_GGUF_PLUGIN_REF=${VLLM_GGUF_PLUGIN_REF:-4ec8d61565cb21a380a7532bb20675883c6734d9}
+VLLM_GGUF_IMAGE="vllm-openai-gguf:${VLLM_GGUF_PLUGIN_REF:0:12}"
 DISTROBOX_CONTAINER=llama-vulkan-radv
 MODEL_NAME=${1:-qwen3.6-35b-a3b}
 
@@ -249,10 +255,17 @@ if [[ "$BACKEND" == "vllm" ]]; then
   # vLLM's official image doesn't ship GGUF support -- build a thin local
   # layer adding vllm-gguf-plugin on top of it (see
   # https://docs.vllm.ai/en/stable/features/quantization/gguf.html), cached
-  # by image tag so this only runs once per VLLM_IMAGE version.
+  # by image tag so this only runs once per (VLLM_IMAGE, VLLM_GGUF_PLUGIN_REF)
+  # pair. Installed from git pinned to VLLM_GGUF_PLUGIN_REF (not the PyPI
+  # wheel, which is stuck at 0.0.5 -- see the header comment) so qwen3.6/3.8
+  # GGUFs work; --no-build-isolation builds its CUDA bits against the image's
+  # already-installed torch instead of pip fetching a fresh one.
   if ! docker image inspect "$VLLM_GGUF_IMAGE" >/dev/null 2>&1; then
-    echo "Building '$VLLM_GGUF_IMAGE' (one-time: $VLLM_IMAGE + vllm-gguf-plugin)..."
-    printf '%s\n' "FROM $VLLM_IMAGE" "RUN pip install --no-cache-dir vllm-gguf-plugin" \
+    echo "Building '$VLLM_GGUF_IMAGE' (one-time: $VLLM_IMAGE + vllm-gguf-plugin@${VLLM_GGUF_PLUGIN_REF:0:12})..."
+    printf '%s\n' \
+      "FROM $VLLM_IMAGE" \
+      "RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*" \
+      "RUN pip install --no-cache-dir --no-build-isolation \"vllm-gguf-plugin @ git+https://github.com/vllm-project/vllm-gguf-plugin.git@${VLLM_GGUF_PLUGIN_REF}\"" \
       | docker build -t "$VLLM_GGUF_IMAGE" -
   fi
 
