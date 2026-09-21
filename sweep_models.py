@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Benchmark a list of models across the Ollama and llama.cpp backends in one run,
-writing a combined CSV and a grouped bar-chart PNG."""
+"""Benchmark a list of models across the Ollama, llama.cpp, and vLLM backends
+in one run, writing a combined CSV and a grouped bar-chart PNG."""
 import argparse
 import os
 import subprocess
@@ -18,16 +18,22 @@ from benchmark_llm_speed import (
     resolve_ollama_device,
     run_benchmark_llamacpp_server,
     run_benchmark_ollama,
+    run_benchmark_vllm_server,
 )
 
 # Ollama tag -> launch_local_llm.sh alias, for models that also have a local GGUF.
-# Models not listed here are skipped for the llamacpp backend.
+# Models not listed here are skipped for the llamacpp/vllm backends. The same
+# alias works for both -- launch_local_llm.sh's VLLM_SUPPORTED gate will
+# reject a model here that llama.cpp supports but vLLM's GGUF loader doesn't
+# (e.g. sharded checkpoints), which just shows up as a FAIL for that row.
 LLAMACPP_ALIASES = {
     "qwen3.6:27b": "qwen3.6-27b",
     "qwen3.6:35b-a3b": "qwen3.6-35b-a3b",
     "qwen2.5:3b": "qwen2.5-3b",
+    "qwen2.5:1.5b": "qwen2.5-1.5b",
     "llama3.2:3b": "llama3.2-3b",
 }
+VLLM_ALIASES = LLAMACPP_ALIASES
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -40,7 +46,7 @@ def unique_prompt(prompt: str, nonce: str) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Benchmark a list of models on Ollama and llama.cpp and plot the results."
+        description="Benchmark a list of models on Ollama, llama.cpp, and vLLM and plot the results."
     )
     parser.add_argument(
         "--models",
@@ -52,9 +58,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--backends",
         nargs="+",
-        choices=["ollama", "llamacpp"],
+        choices=["ollama", "llamacpp", "vllm"],
         default=["ollama", "llamacpp"],
-        help="Which backends to run for each model (llamacpp only applies to models with a known alias).",
+        help="Which backends to run for each model (llamacpp/vllm only apply to models with a known alias).",
     )
     parser.add_argument(
         "--prompt-file",
@@ -67,16 +73,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cuda", "amd", "cpu"])
     parser.add_argument("--ollama-host", type=str, default="http://localhost:11434")
-    parser.add_argument("--llamacpp-host", type=str, default="http://localhost:8000")
+    parser.add_argument("--llamacpp-host", type=str, default="http://localhost:8010")
     parser.add_argument("--llamacpp-ready-timeout", type=int, default=900, help="Seconds to wait for llama-server to come up.")
+    parser.add_argument("--vllm-host", type=str, default="http://localhost:8020")
+    parser.add_argument(
+        "--vllm-ready-timeout", type=int, default=1200,
+        help="Seconds to wait for vLLM to come up (first run also builds the local GGUF-plugin image).",
+    )
     parser.add_argument("--out-csv", type=str, default="logs/model_sweep.csv")
     parser.add_argument("--out-png", type=str, default="logs/model_sweep.png")
     return parser.parse_args()
 
 
-def wait_for_llamacpp_server(host: str, timeout: int, process: subprocess.Popen, log_path: str) -> None:
+def wait_for_local_server(
+    host: str, health_path: str, timeout: int, process: subprocess.Popen, log_path: str, label: str,
+) -> None:
     deadline = time.monotonic() + timeout
-    url = f"{host.rstrip('/')}/health"
+    url = f"{host.rstrip('/')}{health_path}"
     while time.monotonic() < deadline:
         if process.poll() is not None:
             tail = ""
@@ -86,7 +99,7 @@ def wait_for_llamacpp_server(host: str, timeout: int, process: subprocess.Popen,
             except OSError:
                 pass
             raise RuntimeError(
-                f"launch_local_llm.sh exited (code {process.returncode}) before the server became "
+                f"launch_local_llm.sh exited (code {process.returncode}) before {label} became "
                 f"healthy. Tail of {log_path}:\n{tail}"
             )
         try:
@@ -96,21 +109,28 @@ def wait_for_llamacpp_server(host: str, timeout: int, process: subprocess.Popen,
         except (urllib.error.URLError, ConnectionError):
             pass
         time.sleep(3)
-    raise TimeoutError(f"llama.cpp server at {host} did not become ready within {timeout}s")
+    raise TimeoutError(f"{label} at {host} did not become ready within {timeout}s")
 
 
-def start_llamacpp_server(alias: str, log_path: str) -> subprocess.Popen:
+def start_local_server(alias: str, log_path: str, backend_env: str | None = None) -> subprocess.Popen:
     log_file = open(log_path, "w", encoding="utf-8")
+    env = os.environ.copy()
+    if backend_env:
+        env["BACKEND"] = backend_env
     return subprocess.Popen(
         ["./launch_local_llm.sh", alias],
         cwd=REPO_ROOT,
         stdout=log_file,
         stderr=subprocess.STDOUT,
+        env=env,
     )
 
 
-def stop_llamacpp_server(process: subprocess.Popen) -> None:
-    subprocess.run(["docker", "rm", "-f", "llama-vulkan-server", "llama-cuda-server"], capture_output=True)
+def stop_local_server(process: subprocess.Popen) -> None:
+    subprocess.run(
+        ["docker", "rm", "-f", "llama-vulkan-server", "llama-cuda-server", "vllm-server"],
+        capture_output=True,
+    )
     subprocess.run(["distrobox", "enter", "llama-vulkan-radv", "--", "pkill", "-f", "llama-server"], capture_output=True)
     process.terminate()
     try:
@@ -143,7 +163,7 @@ def run_backend_for_model(
             for run_idx in range(args.runs)
         ]
         ollama_unload_model(args.ollama_host, model)
-    else:
+    elif backend == "llamacpp":
         alias = LLAMACPP_ALIASES.get(model)
         if alias is None:
             print(f"  Skipping llamacpp backend for '{model}': no local GGUF/alias configured.")
@@ -152,9 +172,11 @@ def run_backend_for_model(
         log_path = f"logs/llama_server_{alias}.log"
         os.makedirs("logs", exist_ok=True)
         print(f"  Launching llama-server for alias '{alias}'...")
-        process = start_llamacpp_server(alias, log_path)
+        process = start_local_server(alias, log_path)
         try:
-            wait_for_llamacpp_server(args.llamacpp_host, args.llamacpp_ready_timeout, process, log_path)
+            wait_for_local_server(
+                args.llamacpp_host, "/health", args.llamacpp_ready_timeout, process, log_path, "llama.cpp server",
+            )
             for warmup_idx in range(args.warmup):
                 run_benchmark_llamacpp_server(
                     host=args.llamacpp_host, prompt=unique_prompt(args.prompt, f"warmup-{warmup_idx}"),
@@ -170,7 +192,38 @@ def run_backend_for_model(
                 for run_idx in range(args.runs)
             ]
         finally:
-            stop_llamacpp_server(process)
+            stop_local_server(process)
+
+    else:
+        alias = VLLM_ALIASES.get(model)
+        if alias is None:
+            print(f"  Skipping vllm backend for '{model}': no local GGUF/alias configured.")
+            return None
+
+        log_path = f"logs/vllm_server_{alias}.log"
+        os.makedirs("logs", exist_ok=True)
+        print(f"  Launching vLLM for alias '{alias}'...")
+        process = start_local_server(alias, log_path, backend_env="vllm")
+        try:
+            wait_for_local_server(
+                args.vllm_host, "/v1/models", args.vllm_ready_timeout, process, log_path, "vLLM server",
+            )
+            for warmup_idx in range(args.warmup):
+                run_benchmark_vllm_server(
+                    host=args.vllm_host, model_name=alias, prompt=unique_prompt(args.prompt, f"warmup-{warmup_idx}"),
+                    max_new_tokens=min(16, args.max_new_tokens), do_sample=False,
+                    temperature=0.7, top_p=0.9,
+                )
+            runs = [
+                run_benchmark_vllm_server(
+                    host=args.vllm_host, model_name=alias, prompt=unique_prompt(args.prompt, f"run-{run_idx}"),
+                    max_new_tokens=args.max_new_tokens, do_sample=False,
+                    temperature=0.7, top_p=0.9,
+                )
+                for run_idx in range(args.runs)
+            ]
+        finally:
+            stop_local_server(process)
 
     avg_prefill_tps = sum(r["prefill_tps"] for r in runs) / len(runs)
     avg_decode_tps = sum(r["decode_tps"] for r in runs) / len(runs)

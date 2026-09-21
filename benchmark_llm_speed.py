@@ -320,7 +320,7 @@ def run_benchmark_vllm_server(
     top_p: float,
 ) -> dict:
     """Benchmark a model served by vLLM's OpenAI-compatible server (see
-    launch_vllm.sh), streaming /v1/completions to derive prefill (time to
+    launch_local_llm.sh, BACKEND=vllm), streaming /v1/completions to derive prefill (time to
     first token) and decode timings -- vLLM's OpenAI API doesn't report
     prefill/decode durations directly the way llama.cpp's /completion does."""
     payload = {
@@ -374,7 +374,7 @@ def run_benchmark_vllm_server(
         ) from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(
-            f"Failed to reach vLLM server at {url}. Is it running? (see launch_vllm.sh)"
+            f"Failed to reach vLLM server at {url}. Is it running? (see launch_local_llm.sh, BACKEND=vllm)"
         ) from exc
 
     end = time.perf_counter()
@@ -569,7 +569,7 @@ def parse_args() -> argparse.Namespace:
         "--vllm-host",
         type=str,
         default="http://localhost:8020",
-        help="URL of a running vLLM OpenAI-compatible server (see launch_vllm.sh).",
+        help="URL of a running vLLM OpenAI-compatible server (see launch_local_llm.sh, BACKEND=vllm).",
     )
     parser.add_argument(
         "--prompt",
@@ -689,9 +689,12 @@ def main() -> None:
             print("Note: Flash Attention for Ollama is server-side. Start Ollama with OLLAMA_FLASH_ATTENTION=1 to enable it.")
         if args.ollama_pull:
             ollama_pull_model(args.ollama_host, args.model)
-    else:
+    elif args.backend == "llamacpp":
         print(f"Backend: llama.cpp | Host: {args.llamacpp_host}")
         print("Note: expects a llama-server already running there (see launch_local_llm.sh).")
+    else:
+        print(f"Backend: vLLM | Model: {args.model} | Host: {args.vllm_host}")
+        print("Note: expects a vLLM server already running there (see launch_local_llm.sh, BACKEND=vllm).")
 
     print(f"Running {args.warmup} warmup run(s)...")
     for _ in range(args.warmup):
@@ -717,9 +720,19 @@ def main() -> None:
                 top_p=args.top_p,
                 device=ollama_device,
             )
-        else:
+        elif args.backend == "llamacpp":
             _ = run_benchmark_llamacpp_server(
                 host=args.llamacpp_host,
+                prompt=args.prompt,
+                max_new_tokens=min(16, args.max_new_tokens),
+                do_sample=args.do_sample,
+                temperature=args.temperature,
+                top_p=args.top_p,
+            )
+        else:
+            _ = run_benchmark_vllm_server(
+                host=args.vllm_host,
+                model_name=args.model,
                 prompt=args.prompt,
                 max_new_tokens=min(16, args.max_new_tokens),
                 do_sample=args.do_sample,
@@ -760,7 +773,7 @@ def main() -> None:
                 device_label = "ollama-gpu"
             else:
                 device_label = f"ollama-{ollama_device}"
-        else:
+        elif args.backend == "llamacpp":
             metrics = run_benchmark_llamacpp_server(
                 host=args.llamacpp_host,
                 prompt=args.prompt,
@@ -770,6 +783,17 @@ def main() -> None:
                 top_p=args.top_p,
             )
             device_label = "llamacpp-server"
+        else:
+            metrics = run_benchmark_vllm_server(
+                host=args.vllm_host,
+                model_name=args.model,
+                prompt=args.prompt,
+                max_new_tokens=args.max_new_tokens,
+                do_sample=args.do_sample,
+                temperature=args.temperature,
+                top_p=args.top_p,
+            )
+            device_label = "vllm-server"
 
         row = {
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),

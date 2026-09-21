@@ -47,6 +47,7 @@
 ##   qwen3.6-27b                     — Qwen3.6-27B dense
 ##   qwen3.8-27b                     — Qwen3.8-27B dense
 ##   qwen2.5-3b                      — Qwen2.5-3B-Instruct, Q4_K_M
+##   qwen2.5-1.5b                    — Qwen2.5-1.5B-Instruct, Q4_K_M
 ##   llama3.2-3b                     — Llama-3.2-3B-Instruct, Q4_K_M
 ##   deepseek-v4-flash-q8             — DeepSeek-V4-Flash MoE, Q8_0, CUDA (needs fused ops)
 ##   qwen3.8-flash-next               — Qwen3.8-Flash-Next MoE, UD-Q4_K_XL (4 shards, ~111G)
@@ -88,6 +89,23 @@ else
 fi
 
 VLLM_SUPPORTED=0
+# Every model here fits comfortably on a single 96GB GPU except the two
+# sharded MoE models below (~100GB+), so default to pinning the docker
+# backend to one GPU (GPU_DEVICE) rather than exposing --gpus all. Exposing
+# all 4 GPUs to a model that fits on one made llama.cpp auto-split its
+# layers across all of them by default -- e.g. qwen2.5-1.5b (<2GB) was
+# observed spread ~1-1.5GB across all 4 GPUs, and the resulting cross-GPU
+# hop on every layer boundary tanked decode throughput (measured ~460 tok/s
+# for a 1.5B model, well below what a single Blackwell GPU should give it).
+MULTI_GPU=0
+# Quantized KV cache (q8_0) trades decode speed for VRAM -- worth it for the
+# 256k+-context models below where the cache would otherwise be huge, but
+# for the short-context (32768) dense models it saves VRAM nobody needs (a
+# 96GB GPU vs. a model using single-digit GB) at a real decode cost:
+# measured ~12% slower decode (472 -> 528.6 tok/s on qwen2.5-1.5b) with it
+# forced on vs. off. So it defaults on, and the short-context models below
+# turn it off.
+KV_QUANT=1
 case "$MODEL_NAME" in
   qwen3.6-35b-a3b)
     QUANT=${2:-UD-Q4_K_XL}
@@ -135,6 +153,19 @@ case "$MODEL_NAME" in
     TOKENIZER_REPO="Qwen/Qwen2.5-3B-Instruct"
     TOOL_PARSER="hermes"
     VLLM_SUPPORTED=1
+    KV_QUANT=0
+    ;;
+  qwen2.5-1.5b)
+    MODEL_FILE="$MODELS/qwen2.5-1.5b/qwen2.5-1.5b-instruct-q4_k_m.gguf"
+    MMPROJ=""
+    ALIAS="qwen2.5-1.5b"
+    CTX=32768
+    EXTRA_FLAGS=(-b 512 -ub 512)
+    HF_REPO="Qwen/Qwen2.5-1.5B-Instruct-GGUF"
+    TOKENIZER_REPO="Qwen/Qwen2.5-1.5B-Instruct"
+    TOOL_PARSER="hermes"
+    VLLM_SUPPORTED=1
+    KV_QUANT=0
     ;;
   llama3.2-3b)
     MODEL_FILE="$MODELS/llama3.2-3b/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
@@ -146,6 +177,7 @@ case "$MODEL_NAME" in
     TOKENIZER_REPO="meta-llama/Llama-3.2-3B-Instruct"
     TOOL_PARSER="llama3_json"
     VLLM_SUPPORTED=1
+    KV_QUANT=0
     ;;
   deepseek-v4-flash-q8)
     MODEL_FILE="$MODELS/DeepSeek-V4-Flash-Q8/Q8_0/DeepSeek-V4-Flash-Q8_0-00001-of-00007.gguf"
@@ -157,6 +189,7 @@ case "$MODEL_NAME" in
     # No HF_REPO: this file is one of 7 shards, too large/complex to
     # single-file auto-download -- run `hf download` for it manually.
     HF_REPO=""
+    MULTI_GPU=1  # too large for a single 96GB GPU
     ;;
   qwen3.8-flash-next)
     QUANT="UD-Q4_K_XL"
@@ -170,10 +203,11 @@ case "$MODEL_NAME" in
     EXTRA_FLAGS=(-b 128 -ub 128 --rope-scaling yarn --rope-scale 2 --yarn-orig-ctx 262144)
     HF_REPO="unsloth/Qwen3.8-Flash-Next-GGUF"
     HF_INCLUDE="$QUANT/*"
+    MULTI_GPU=1  # ~111GB, too large for a single 96GB GPU
     ;;
   *)
     echo "Unknown model: $MODEL_NAME"
-    echo "Usage: $0 [qwen3.6-35b-a3b|qwen3.6-27b|qwen3.8-27b|qwen2.5-3b|llama3.2-3b|deepseek-v4-flash-q8|qwen3.8-flash-next] [quant]"
+    echo "Usage: $0 [qwen3.6-35b-a3b|qwen3.6-27b|qwen3.8-27b|qwen2.5-3b|qwen2.5-1.5b|llama3.2-3b|deepseek-v4-flash-q8|qwen3.8-flash-next] [quant]"
     exit 1
     ;;
 esac
@@ -237,7 +271,8 @@ if [[ "$BACKEND" == "distrobox" ]]; then
   CMD="llama-server -m $MODEL_FILE --alias $ALIAS"
   [[ -n "$MMPROJ" && -f "$MMPROJ" ]] && CMD="$CMD --mmproj $MMPROJ --image-min-tokens 1024"
   CMD="$CMD -ngl 999 --no-mmap --ctx-size $CTX --host 0.0.0.0 --port 8000 --jinja"
-  CMD="$CMD --cache-type-k q8_0 --cache-type-v q8_0 ${EXTRA_FLAGS[*]}"
+  [[ "$KV_QUANT" -eq 1 ]] && CMD="$CMD --cache-type-k q8_0 --cache-type-v q8_0"
+  CMD="$CMD ${EXTRA_FLAGS[*]}"
   distrobox enter "$DISTROBOX_CONTAINER" -- bash -c "$CMD"
   exit 0
 fi
@@ -307,9 +342,21 @@ for group in render video; do
   gid=$(getent group "$group" | cut -d: -f3) || true
   [[ -n "${gid:-}" ]] && GPU_FLAGS+=(--group-add "$gid")
 done
-command -v nvidia-smi >/dev/null 2>&1 && GPU_FLAGS+=(--gpus all)
+if command -v nvidia-smi >/dev/null 2>&1; then
+  if [[ "$MULTI_GPU" -eq 1 ]]; then
+    GPU_FLAGS+=(--gpus all)
+  else
+    # Pin to a single GPU (default 0, override with GPU_DEVICE) so
+    # llama.cpp doesn't auto-split a model that fits on one GPU across all
+    # of them -- see the MULTI_GPU comment above the model case statement.
+    GPU_FLAGS+=(--gpus "device=${GPU_DEVICE:-0}")
+  fi
+fi
 
 docker rm -f llama-vulkan-server llama-cuda-server vllm-server >/dev/null 2>&1 || true
+
+KV_CACHE_FLAGS=()
+[[ "$KV_QUANT" -eq 1 ]] && KV_CACHE_FLAGS=(--cache-type-k q8_0 --cache-type-v q8_0)
 
 # Runs attached (no -d), so all llama-server output stays in this terminal and
 # the shell blocks here until the container exits. If it exits early (crash,
@@ -322,7 +369,7 @@ docker run --rm --name "$CONTAINER_NAME" \
   "$IMAGE" \
   -m "$MODEL_FILE" --alias "$ALIAS" "${MMPROJ_FLAGS[@]}" \
   -ngl 999 --load-mode none --ctx-size "$CTX" --host 0.0.0.0 --port 8010 --jinja \
-  --cache-type-k q8_0 --cache-type-v q8_0 "${EXTRA_FLAGS[@]}"
+  "${KV_CACHE_FLAGS[@]}" "${EXTRA_FLAGS[@]}"
 status=$?
 set -e
 
