@@ -29,8 +29,10 @@ from benchmark_llm_speed import (
 LLAMACPP_ALIASES = {
     "qwen3.6:27b": "qwen3.6-27b",
     "qwen3.6:35b-a3b": "qwen3.6-35b-a3b",
+    "qwen3.8:27b": "qwen3.8-27b",
     "qwen2.5:3b": "qwen2.5-3b",
     "qwen2.5:1.5b": "qwen2.5-1.5b",
+    "qwen2.5:1.5b-instruct-q8_0": "qwen2.5-1.5b-q8",
     "llama3.2:3b": "llama3.2-3b",
 }
 VLLM_ALIASES = LLAMACPP_ALIASES

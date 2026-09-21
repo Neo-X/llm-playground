@@ -48,6 +48,7 @@
 ##   qwen3.8-27b                     — Qwen3.8-27B dense
 ##   qwen2.5-3b                      — Qwen2.5-3B-Instruct, Q4_K_M
 ##   qwen2.5-1.5b                    — Qwen2.5-1.5B-Instruct, Q4_K_M
+##   qwen2.5-1.5b-q8                 — Qwen2.5-1.5B-Instruct, Q8_0 (llama.cpp vs. vLLM GGUF-kernel A/B)
 ##   llama3.2-3b                     — Llama-3.2-3B-Instruct, Q4_K_M
 ##   deepseek-v4-flash-q8             — DeepSeek-V4-Flash MoE, Q8_0, CUDA (needs fused ops)
 ##   qwen3.8-flash-next               — Qwen3.8-Flash-Next MoE, UD-Q4_K_XL (4 shards, ~111G)
@@ -91,12 +92,16 @@ fi
 VLLM_SUPPORTED=0
 # Every model here fits comfortably on a single 96GB GPU except the two
 # sharded MoE models below (~100GB+), so default to pinning the docker
-# backend to one GPU (GPU_DEVICE) rather than exposing --gpus all. Exposing
-# all 4 GPUs to a model that fits on one made llama.cpp auto-split its
-# layers across all of them by default -- e.g. qwen2.5-1.5b (<2GB) was
-# observed spread ~1-1.5GB across all 4 GPUs, and the resulting cross-GPU
-# hop on every layer boundary tanked decode throughput (measured ~460 tok/s
-# for a 1.5B model, well below what a single Blackwell GPU should give it).
+# backend (both llama.cpp and vLLM) to one GPU (GPU_DEVICE) rather than
+# exposing --gpus all. Exposing all 4 GPUs to a model that fits on one made
+# llama.cpp auto-split its layers across all of them by default -- e.g.
+# qwen2.5-1.5b (<2GB) was observed spread ~1-1.5GB across all 4 GPUs, and the
+# resulting cross-GPU hop on every layer boundary tanked decode throughput
+# (measured ~460 tok/s for a 1.5B model, well below what a single Blackwell
+# GPU should give it). The vLLM docker run command had the same `--gpus all`
+# bug (fixed to respect MULTI_GPU too) even though vLLM's TP=1 doesn't
+# auto-split like that -- it still meant needless multi-GPU device discovery
+# at startup and non-deterministic GPU placement.
 MULTI_GPU=0
 # Quantized KV cache (q8_0) trades decode speed for VRAM -- worth it for the
 # 256k+-context models below where the cache would otherwise be huge, but
@@ -167,6 +172,22 @@ case "$MODEL_NAME" in
     VLLM_SUPPORTED=1
     KV_QUANT=0
     ;;
+  qwen2.5-1.5b-q8)
+    # Same model/repo as qwen2.5-1.5b, but the legacy (non-K) Q8_0 quant --
+    # used to check whether vLLM's under-optimized GGUF K-quant dequant
+    # kernels (vs. llama.cpp's) explain the decode-speed gap between the
+    # two backends, independent of any launch_local_llm.sh configuration.
+    MODEL_FILE="$MODELS/qwen2.5-1.5b/qwen2.5-1.5b-instruct-q8_0.gguf"
+    MMPROJ=""
+    ALIAS="qwen2.5-1.5b-q8"
+    CTX=32768
+    EXTRA_FLAGS=(-b 512 -ub 512)
+    HF_REPO="Qwen/Qwen2.5-1.5B-Instruct-GGUF"
+    TOKENIZER_REPO="Qwen/Qwen2.5-1.5B-Instruct"
+    TOOL_PARSER="hermes"
+    VLLM_SUPPORTED=1
+    KV_QUANT=0
+    ;;
   llama3.2-3b)
     MODEL_FILE="$MODELS/llama3.2-3b/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
     MMPROJ=""
@@ -207,7 +228,7 @@ case "$MODEL_NAME" in
     ;;
   *)
     echo "Unknown model: $MODEL_NAME"
-    echo "Usage: $0 [qwen3.6-35b-a3b|qwen3.6-27b|qwen3.8-27b|qwen2.5-3b|qwen2.5-1.5b|llama3.2-3b|deepseek-v4-flash-q8|qwen3.8-flash-next] [quant]"
+    echo "Usage: $0 [qwen3.6-35b-a3b|qwen3.6-27b|qwen3.8-27b|qwen2.5-3b|qwen2.5-1.5b|qwen2.5-1.5b-q8|llama3.2-3b|deepseek-v4-flash-q8|qwen3.8-flash-next] [quant]"
     exit 1
     ;;
 esac
@@ -308,21 +329,43 @@ if [[ "$BACKEND" == "vllm" ]]; then
   HF_TOKEN_FLAGS=()
   [[ -n "${HF_TOKEN:-}" ]] && HF_TOKEN_FLAGS=(--env "HF_TOKEN=$HF_TOKEN")
 
+  # Same MULTI_GPU pinning as the llama.cpp docker backend below (see the
+  # comment above the model case statement) -- this was previously hardcoded
+  # to `--gpus all` regardless of MULTI_GPU/TP, which exposed all 4 GPUs to
+  # every vLLM container even for TP=1 single-GPU models. That added
+  # needless NCCL/device-discovery overhead at startup and made GPU
+  # placement non-deterministic across the visible devices, so pin to one
+  # GPU by default just like llama.cpp does.
+  if [[ "$MULTI_GPU" -eq 1 ]]; then
+    VLLM_GPU_FLAGS=(--gpus all)
+  else
+    VLLM_GPU_FLAGS=(--gpus "device=${GPU_DEVICE:-0}")
+  fi
+
+  # gpu-memory-utilization is a fraction of the single pinned GPU's memory
+  # (not summed across devices), reserved upfront for weights + KV cache.
+  # 0.90 of a 96GB GPU is much more KV cache than any of these models need
+  # at their configured CTX -- lower it so allocation/profiling at startup
+  # has less to do and there's more headroom for other things sharing the
+  # GPU. Override with VLLM_GPU_MEM_UTIL if a model genuinely needs more.
+  VLLM_GPU_MEM_UTIL=${VLLM_GPU_MEM_UTIL:-0.85}
+
   echo "Using docker image '$VLLM_GGUF_IMAGE' as container '$CONTAINER_NAME' (onyx Nvidia backend)"
-  echo "Model file: $MODEL_FILE | tokenizer: $TOKENIZER_REPO | tensor-parallel-size: $TP | max-model-len: $CTX"
+  echo "Model file: $MODEL_FILE | tokenizer: $TOKENIZER_REPO | tensor-parallel-size: $TP | max-model-len: $CTX | gpu-memory-utilization: $VLLM_GPU_MEM_UTIL"
+  echo "GPU flags: ${VLLM_GPU_FLAGS[*]}"
 
   docker rm -f vllm-server llama-vulkan-server llama-cuda-server >/dev/null 2>&1 || true
 
   set +e
   docker run --rm --name "$CONTAINER_NAME" \
-    --runtime nvidia --gpus all --ipc=host \
+    --runtime nvidia "${VLLM_GPU_FLAGS[@]}" --ipc=host \
     -v "$MODELS:$MODELS" \
     -v ~/.cache/huggingface:/root/.cache/huggingface \
     "${HF_TOKEN_FLAGS[@]}" \
     -p 8020:8000 \
     "$VLLM_GGUF_IMAGE" \
     --model "$MODEL_FILE" --tokenizer "$TOKENIZER_REPO" --served-model-name "$ALIAS" \
-    --tensor-parallel-size "$TP" --max-model-len "$CTX" --gpu-memory-utilization 0.90 \
+    --tensor-parallel-size "$TP" --max-model-len "$CTX" --gpu-memory-utilization "$VLLM_GPU_MEM_UTIL" \
     --enable-auto-tool-choice --tool-call-parser "$TOOL_PARSER"
   status=$?
   set -e
