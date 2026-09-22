@@ -26,7 +26,7 @@
       }
     },
     "vllm": {
-      "name": "vLLM (local)",
+      "name": "vLLM (onyx)",
       "npm": "@ai-sdk/openai-compatible",
       "options": {
         "baseURL": "http://localhost:8020/v1"
