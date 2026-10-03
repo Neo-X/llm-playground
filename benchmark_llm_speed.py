@@ -282,6 +282,12 @@ def run_benchmark_llamacpp_server(
         "temperature": temperature if do_sample else 0.0,
         "top_p": top_p,
         "stream": False,
+        # Some instruct models emit EOS almost immediately when given a raw
+        # (non-chat) continuation prompt, generating ~1 token regardless of
+        # n_predict. Force the full requested length so decode-speed
+        # measurements reflect sustained throughput, not where the model
+        # happened to want to stop.
+        "ignore_eos": True,
     }
 
     response = llamacpp_post(host, "/completion", payload)
@@ -331,6 +337,9 @@ def run_benchmark_vllm_server(
         "top_p": top_p,
         "stream": True,
         "stream_options": {"include_usage": True},
+        # See the matching comment in run_benchmark_llamacpp_server -- vLLM
+        # exposes the same extension on /v1/completions.
+        "ignore_eos": True,
     }
     url = f"{host.rstrip('/')}/v1/completions"
     req = urllib.request.Request(

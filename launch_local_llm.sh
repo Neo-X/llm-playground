@@ -111,6 +111,15 @@ MULTI_GPU=0
 # forced on vs. off. So it defaults on, and the short-context models below
 # turn it off.
 KV_QUANT=1
+# Number of parallel request slots llama-server keeps resident (continuous
+# batching across slots). Defaults to 3 so up to 3 concurrent tasks/agents
+# hitting this server get served at once instead of queuing behind each
+# other -- per-slot decode speed drops somewhat as more slots are active
+# simultaneously (see logs/concurrency_sweep*.csv), but that's a better
+# tradeoff than one task blocking the others outright. Override via
+# LLAMACPP_PARALLEL. Note --ctx-size above is split across slots, so raising
+# this shrinks each slot's usable context.
+LLAMACPP_PARALLEL=${LLAMACPP_PARALLEL:-3}
 case "$MODEL_NAME" in
   qwen3.6-35b-a3b)
     QUANT=${2:-UD-Q4_K_XL}
@@ -291,7 +300,7 @@ if [[ "$BACKEND" == "distrobox" ]]; then
   echo "Using distrobox container '$DISTROBOX_CONTAINER' (AMD laptop backend)"
   CMD="llama-server -m $MODEL_FILE --alias $ALIAS"
   [[ -n "$MMPROJ" && -f "$MMPROJ" ]] && CMD="$CMD --mmproj $MMPROJ --image-min-tokens 1024"
-  CMD="$CMD -ngl 999 --no-mmap --ctx-size $CTX --host 0.0.0.0 --port 8000 --jinja"
+  CMD="$CMD -ngl 999 --no-mmap --ctx-size $CTX --host 0.0.0.0 --port 8000 --jinja --parallel $LLAMACPP_PARALLEL"
   [[ "$KV_QUANT" -eq 1 ]] && CMD="$CMD --cache-type-k q8_0 --cache-type-v q8_0"
   CMD="$CMD ${EXTRA_FLAGS[*]}"
   distrobox enter "$DISTROBOX_CONTAINER" -- bash -c "$CMD"
@@ -412,6 +421,7 @@ docker run --rm --name "$CONTAINER_NAME" \
   "$IMAGE" \
   -m "$MODEL_FILE" --alias "$ALIAS" "${MMPROJ_FLAGS[@]}" \
   -ngl 999 --load-mode none --ctx-size "$CTX" --host 0.0.0.0 --port 8010 --jinja \
+  --parallel "$LLAMACPP_PARALLEL" \
   "${KV_CACHE_FLAGS[@]}" "${EXTRA_FLAGS[@]}"
 status=$?
 set -e
