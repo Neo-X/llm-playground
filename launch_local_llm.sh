@@ -242,6 +242,18 @@ case "$MODEL_NAME" in
     ;;
 esac
 
+# CTX above is the per-slot context each model was sized for (back when
+# LLAMACPP_PARALLEL defaulted to 1, --ctx-size == what one slot got). Now
+# that llama-server divides --ctx-size evenly across LLAMACPP_PARALLEL slots,
+# passing CTX straight through would silently shrink each slot to CTX/N --
+# e.g. 3 parallel connections would each only get a third of the context the
+# model was configured for. Scale the total passed to --ctx-size by the slot
+# count instead, so each of the LLAMACPP_PARALLEL concurrent connections
+# still gets the full CTX. Only applies to the llama.cpp backends (docker,
+# distrobox) -- vLLM's --max-model-len isn't divided across concurrent
+# requests the same way, so it uses CTX unscaled.
+LLAMACPP_CTX_TOTAL=$((CTX * LLAMACPP_PARALLEL))
+
 maybe_download() {
   local file_path="$1"
   [[ -f "$file_path" ]] && return 0
@@ -300,7 +312,7 @@ if [[ "$BACKEND" == "distrobox" ]]; then
   echo "Using distrobox container '$DISTROBOX_CONTAINER' (AMD laptop backend)"
   CMD="llama-server -m $MODEL_FILE --alias $ALIAS"
   [[ -n "$MMPROJ" && -f "$MMPROJ" ]] && CMD="$CMD --mmproj $MMPROJ --image-min-tokens 1024"
-  CMD="$CMD -ngl 999 --no-mmap --ctx-size $CTX --host 0.0.0.0 --port 8000 --jinja --parallel $LLAMACPP_PARALLEL"
+  CMD="$CMD -ngl 999 --no-mmap --ctx-size $LLAMACPP_CTX_TOTAL --host 0.0.0.0 --port 8000 --jinja --parallel $LLAMACPP_PARALLEL"
   [[ "$KV_QUANT" -eq 1 ]] && CMD="$CMD --cache-type-k q8_0 --cache-type-v q8_0"
   CMD="$CMD ${EXTRA_FLAGS[*]}"
   distrobox enter "$DISTROBOX_CONTAINER" -- bash -c "$CMD"
@@ -345,10 +357,12 @@ if [[ "$BACKEND" == "vllm" ]]; then
   # needless NCCL/device-discovery overhead at startup and made GPU
   # placement non-deterministic across the visible devices, so pin to one
   # GPU by default just like llama.cpp does.
-  if [[ "$MULTI_GPU" -eq 1 ]]; then
+  if [[ "$MULTI_GPU" -eq 1 && -z "${GPU_DEVICE:-}" ]]; then
     VLLM_GPU_FLAGS=(--gpus all)
   else
-    VLLM_GPU_FLAGS=(--gpus "device=${GPU_DEVICE:-0}")
+    # See the matching comment in the llama.cpp GPU_FLAGS section below for
+    # why the device list needs embedded double quotes.
+    VLLM_GPU_FLAGS=(--gpus "\"device=${GPU_DEVICE:-0}\"")
   fi
 
   # gpu-memory-utilization is a fraction of the single pinned GPU's memory
@@ -388,6 +402,7 @@ if [[ "$BACKEND" == "vllm" ]]; then
 fi
 
 echo "Using docker image '$IMAGE' as container '$CONTAINER_NAME' (onyx 4x Nvidia backend)"
+echo "Context: $CTX per slot x $LLAMACPP_PARALLEL parallel slots = $LLAMACPP_CTX_TOTAL total --ctx-size"
 
 GPU_FLAGS=(--device /dev/dri)
 for group in render video; do
@@ -395,13 +410,19 @@ for group in render video; do
   [[ -n "${gid:-}" ]] && GPU_FLAGS+=(--group-add "$gid")
 done
 if command -v nvidia-smi >/dev/null 2>&1; then
-  if [[ "$MULTI_GPU" -eq 1 ]]; then
+  if [[ "$MULTI_GPU" -eq 1 && -z "${GPU_DEVICE:-}" ]]; then
     GPU_FLAGS+=(--gpus all)
   else
-    # Pin to a single GPU (default 0, override with GPU_DEVICE) so
-    # llama.cpp doesn't auto-split a model that fits on one GPU across all
-    # of them -- see the MULTI_GPU comment above the model case statement.
-    GPU_FLAGS+=(--gpus "device=${GPU_DEVICE:-0}")
+    # Pin to a single GPU (default 0) or an explicit comma-separated subset
+    # via GPU_DEVICE (e.g. GPU_DEVICE=0,3) -- lets a MULTI_GPU=1 model avoid
+    # specific GPUs (e.g. ones already busy with another job) instead of
+    # always grabbing all 4. See the MULTI_GPU comment above the model case
+    # statement for why single-GPU models pin at all. The embedded double
+    # quotes are required by docker's --gpus parser for a comma-separated
+    # device list -- without them it errors "cannot set both Count and
+    # DeviceIDs on device request" (reproduced directly; a single device ID
+    # works either way, so always quoting is safe).
+    GPU_FLAGS+=(--gpus "\"device=${GPU_DEVICE:-0}\"")
   fi
 fi
 
@@ -420,7 +441,7 @@ docker run --rm --name "$CONTAINER_NAME" \
   -p 8010:8010 \
   "$IMAGE" \
   -m "$MODEL_FILE" --alias "$ALIAS" "${MMPROJ_FLAGS[@]}" \
-  -ngl 999 --load-mode none --ctx-size "$CTX" --host 0.0.0.0 --port 8010 --jinja \
+  -ngl 999 --load-mode none --ctx-size "$LLAMACPP_CTX_TOTAL" --host 0.0.0.0 --port 8010 --jinja \
   --parallel "$LLAMACPP_PARALLEL" \
   "${KV_CACHE_FLAGS[@]}" "${EXTRA_FLAGS[@]}"
 status=$?
