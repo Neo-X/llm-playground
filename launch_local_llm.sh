@@ -71,8 +71,13 @@ MODEL_NAME=${1:-qwen3.6-35b-a3b}
 # (CUDA image, this machine's dev container); the AMD laptop (Strix Halo
 # iGPU, no nvidia-smi) uses the old distrobox container (Vulkan) instead.
 # BACKEND=vllm is never auto-selected -- opt in explicitly.
+if command -v nvidia-smi >/dev/null 2>&1 && [[ "$(nvidia-smi -L | wc -l)" -eq 4 ]]; then
+  ON_ONYX=1
+else
+  ON_ONYX=0
+fi
 if [[ -z "${BACKEND:-}" ]]; then
-  if command -v nvidia-smi >/dev/null 2>&1 && [[ "$(nvidia-smi -L | wc -l)" -eq 4 ]]; then
+  if [[ "$ON_ONYX" -eq 1 ]]; then
     BACKEND=docker
   else
     BACKEND=distrobox
@@ -112,14 +117,19 @@ MULTI_GPU=0
 # turn it off.
 KV_QUANT=1
 # Number of parallel request slots llama-server keeps resident (continuous
-# batching across slots). Defaults to 3 so up to 3 concurrent tasks/agents
-# hitting this server get served at once instead of queuing behind each
-# other -- per-slot decode speed drops somewhat as more slots are active
-# simultaneously (see logs/concurrency_sweep*.csv), but that's a better
-# tradeoff than one task blocking the others outright. Override via
-# LLAMACPP_PARALLEL. Note --ctx-size above is split across slots, so raising
-# this shrinks each slot's usable context.
-LLAMACPP_PARALLEL=${LLAMACPP_PARALLEL:-3}
+# batching across slots). Defaults to 3 on onyx so up to 3 concurrent
+# tasks/agents hitting this server get served at once instead of queuing
+# behind each other -- per-slot decode speed drops somewhat as more slots are
+# active simultaneously (see logs/concurrency_sweep*.csv), but that's a better
+# tradeoff than one task blocking the others outright. The AMD laptop can only
+# handle one slot, so it defaults to 1 there. Override via LLAMACPP_PARALLEL.
+# Note --ctx-size above is split across slots, so raising this shrinks each
+# slot's usable context.
+if [[ "$ON_ONYX" -eq 1 ]]; then
+  LLAMACPP_PARALLEL=${LLAMACPP_PARALLEL:-3}
+else
+  LLAMACPP_PARALLEL=${LLAMACPP_PARALLEL:-1}
+fi
 case "$MODEL_NAME" in
   qwen3.6-35b-a3b)
     QUANT=${2:-UD-Q4_K_XL}
@@ -298,6 +308,23 @@ maybe_download_sharded() {
   HF_XET_HIGH_PERFORMANCE=1 hf download "$HF_REPO" --include "$include_pattern" --local-dir "$local_dir"
 }
 
+if [[ "${CHECK_FILE_ONLY:-0}" == "1" ]]; then
+  # Report whether this alias's model file(s) are present on disk, without
+  # downloading or launching anything -- used by sweep_models.py's
+  # --check-model-files preflight to catch missing GGUFs before it spends
+  # time launching a server that will just fail.
+  status="MISSING"
+  [[ -f "$MODEL_FILE" ]] && status="EXISTS"
+  echo "$status $MODEL_FILE"
+  if [[ -n "$MMPROJ" ]]; then
+    mmproj_status="MISSING"
+    [[ -f "$MMPROJ" ]] && mmproj_status="EXISTS"
+    echo "$mmproj_status $MMPROJ"
+  fi
+  [[ "$status" == "EXISTS" ]]
+  exit $?
+fi
+
 if [[ -n "${HF_INCLUDE:-}" ]]; then
   maybe_download_sharded "$MODEL_FILE" "$HF_INCLUDE" "$MODEL_DIR"
 else
@@ -385,9 +412,10 @@ if [[ "$BACKEND" == "vllm" ]]; then
     -v "$MODELS:$MODELS" \
     -v ~/.cache/huggingface:/root/.cache/huggingface \
     "${HF_TOKEN_FLAGS[@]}" \
-    -p 8020:8000 \
+    -p 8020:8020 \
     "$VLLM_GGUF_IMAGE" \
     --model "$MODEL_FILE" --tokenizer "$TOKENIZER_REPO" --served-model-name "$ALIAS" \
+    --port 8020 \
     --tensor-parallel-size "$TP" --max-model-len "$CTX" --gpu-memory-utilization "$VLLM_GPU_MEM_UTIL" \
     --enable-auto-tool-choice --tool-call-parser "$TOOL_PARSER"
   status=$?

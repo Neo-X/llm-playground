@@ -568,7 +568,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--llamacpp-host",
         type=str,
-        default="http://localhost:8000",
+        default="http://localhost:8010",
         help=(
             "URL of a running llama.cpp `llama-server` instance (see launch_local_llm.sh, "
             "which serves models via docker/distrobox)."

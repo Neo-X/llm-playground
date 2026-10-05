@@ -92,7 +92,7 @@ python benchmark_llm_speed.py --backend transformers --model Qwen/Qwen2.5-3B-Ins
 python benchmark_llm_speed.py --backend ollama --model qwen2.5:3b --ollama-pull
 
 # llama.cpp backend (expects launch_local_llm.sh already running)
-python benchmark_llm_speed.py --backend llamacpp --llamacpp-host http://localhost:8000 --model qwen3.6-27b
+python benchmark_llm_speed.py --backend llamacpp --llamacpp-host http://localhost:8010 --model qwen3.6-27b
 ```
 
 ## 4) Logs
@@ -195,11 +195,11 @@ produces the ~78 t/s decode result on this hardware.
 ```bash
 MODELS=/home/gberseth/playground/llama.cpp/models
 
-distrobox enter llama-vulkan-radv -- bash -c "llama-server -m $MODELS/qwen3.6-35B-A3B/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf --alias qwen3.6-moe -ngl 999 --no-mmap --ctx-size 65536 --host 0.0.0.0 --port 8000 --jinja --cache-type-k q8_0 --cache-type-v q8_0 -b 128 -ub 128"
+distrobox enter llama-vulkan-radv -- bash -c "llama-server -m $MODELS/qwen3.6-35B-A3B/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf --alias qwen3.6-moe -ngl 999 --no-mmap --ctx-size 65536 --host 0.0.0.0 --port 8010 --jinja --cache-type-k q8_0 --cache-type-v q8_0 -b 128 -ub 128"
 ```
 
 ```bash
-export ANTHROPIC_BASE_URL="http://localhost:8000"
+export ANTHROPIC_BASE_URL="http://localhost:8010"
 export ANTHROPIC_API_KEY="sk-no-key-required"
 export ANTHROPIC_MODEL="private-model"
 
@@ -264,7 +264,7 @@ uv run python bench_server_settings.py \
 | `--ctx-size` | `32768` | Server KV context (must exceed largest prompt size) |
 | `--flash-attn` | off | Also test each batch size with `-fa 1` |
 | `--runs` | `2` | Timed runs per (config, prompt size) |
-| `--port` | `8001` | Use a different port than the main server (8000) |
+| `--port` | `8001` | Use a different port than the main server (8010) |
 | `--resummarize` | — | Regenerate plots from existing `results.jsonl` |
 
 ### Output
@@ -316,8 +316,14 @@ Notes:
   pins, e.g. `vllm-openai-gguf:4ec8d61565cb`) on top of the official
   `vllm/vllm-openai:latest` image. Cached after that; bumping
   `VLLM_GGUF_PLUGIN_REF` changes the tag and triggers a rebuild.
-- Serves the OpenAI-compatible API on **port 8020** (llama.cpp uses 8010
-  docker / 8000 distrobox, so all three can run side by side).
+- Serves the OpenAI-compatible API on **port 8020**, always -- llama.cpp
+  (docker or distrobox) always serves on **port 8010**, regardless of
+  backend. These are fixed, not backend-dependent: distrobox used to bind
+  llama.cpp to port 8000 instead, which silently broke any script using the
+  8010 default (`sweep_models.py`'s `--llamacpp-host` waited on the wrong
+  port and timed out even though the server was up and healthy on 8000).
+  Keeping both backends on the same port means a script never needs to know
+  which backend is running to reach the server.
 - Defaults to `--tensor-parallel-size 1`. Set `TP=2` (etc.) to span more
   GPUs -- GGUF + tensor-parallel is undocumented upstream, so treat higher
   values as experimental.
@@ -343,7 +349,7 @@ Same command as above — llama-server's `/v1` endpoint is already OpenAI-compat
 ```bash
 MODELS=/home/gberseth/playground/llama.cpp/models
 
-distrobox enter llama-vulkan-radv -- bash -c "llama-server -m $MODELS/qwen3.6-35B-A3B/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf --alias qwen3.6-moe -ngl 999 --no-mmap --ctx-size 65536 --host 0.0.0.0 --port 8000 --jinja --cache-type-k q8_0 --cache-type-v q8_0 -b 128 -ub 128"
+distrobox enter llama-vulkan-radv -- bash -c "llama-server -m $MODELS/qwen3.6-35B-A3B/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf --alias qwen3.6-moe -ngl 999 --no-mmap --ctx-size 65536 --host 0.0.0.0 --port 8010 --jinja --cache-type-k q8_0 --cache-type-v q8_0 -b 128 -ub 128"
 ```
 
 ### Configure opencode.json
@@ -358,7 +364,7 @@ Place an `opencode.json` in your project directory (or `~/.config/opencode/openc
       "npm": "@ai-sdk/openai-compatible",
       "name": "llama.cpp (local)",
       "options": {
-        "baseURL": "http://localhost:8000/v1"
+        "baseURL": "http://localhost:8010/v1"
       },
       "models": {
         "qwen3.6-moe": {
@@ -415,7 +421,7 @@ Same idea as the Ollama tunnel above, for the `BACKEND=vllm` server (see section
 ```
 Host <REMOTE_HOST>-llamacpp
   HostName <REMOTE_HOST>
-  LocalForward 8001 localhost:8000
+  LocalForward 8001 localhost:8010
   LocalForward 8020 localhost:8020
 ```
 
