@@ -308,7 +308,7 @@ Bump `VLLM_GGUF_PLUGIN_REF` to a version tag once a PyPI release ships past
 0.0.5 with this fix.
 
 Notes:
-- Onyx (Nvidia) only -- there's no Vulkan/AMD path for vLLM here.
+- Remote host (`$REMOTE_HOST`, Nvidia) only -- there's no Vulkan/AMD path for vLLM here.
 - Not every alias supports it: sharded GGUFs (`qwen3.8-flash-next`,
   `deepseek-v4-flash-q8`) aren't supported by vLLM's GGUF loader, which
   only handles single-file checkpoints.
@@ -492,7 +492,7 @@ uv run tests/update_and_test_llama_image.py --skip-pull        # test the image 
 uv run tests/update_and_test_llama_image.py --image <tag>      # test a specific image tag
 ```
 
-For the remote (onyx) server instead, see `tests/update_and_test_remote_llm.py`:
+For the remote (`$REMOTE_HOST`) server instead, see `tests/update_and_test_remote_llm.py`:
 
 ```bash
 uv run tests/update_and_test_remote_llm.py

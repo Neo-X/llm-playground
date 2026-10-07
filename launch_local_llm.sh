@@ -3,7 +3,7 @@
 ## vLLM's OpenAI-compatible server, both via docker.
 ##
 ## Three backends:
-##   - BACKEND=docker (auto-selected on Onyx, 4x Nvidia GPUs): llama-server
+##   - BACKEND=docker (auto-selected on the remote host, 4x Nvidia GPUs): llama-server
 ##     via the official ghcr.io/ggml-org/llama.cpp CUDA image (this
 ##     machine's dev container is CUDA-based, so native CUDA kernels are
 ##     used rather than Vulkan). Use tests/update_and_test_llama_image.py to
@@ -20,7 +20,7 @@
 ##     experimental GGUF loader (vllm-gguf-plugin). Use this when you want
 ##     continuous batching / PagedAttention for many concurrent users or
 ##     agents hitting the server at once -- llama-server serves requests
-##     with much less request-level concurrency. Onyx (Nvidia) only; not
+##     with much less request-level concurrency. Remote host (Nvidia) only; not
 ##     every model alias supports it (see VLLM_SUPPORTED below -- sharded
 ##     GGUFs aren't supported by vLLM's GGUF loader).
 ##     qwen3.6-35b-a3b/qwen3.6-27b/qwen3.8-27b need vllm-gguf-plugin's
@@ -41,7 +41,7 @@
 ##
 ## Usage: ./launch_local_llm.sh [model] [quant]
 ##
-## Models (image is CUDA on onyx / Vulkan on the AMD laptop, per backend above,
+## Models (image is CUDA on the remote host / Vulkan on the AMD laptop, per backend above,
 ## except deepseek-v4-flash-q8 which always forces CUDA):
 ##   qwen3.6-35b-a3b       (default) — Qwen3.6-35B-A3B MoE
 ##   qwen3.6-27b                     — Qwen3.6-27B dense
@@ -67,17 +67,17 @@ VLLM_GGUF_IMAGE="vllm-openai-gguf:${VLLM_GGUF_PLUGIN_REF:0:12}"
 DISTROBOX_CONTAINER=llama-vulkan-radv
 MODEL_NAME=${1:-qwen3.6-35b-a3b}
 
-# Auto-detect backend: onyx has 4 Nvidia GPUs and uses the docker server
+# Auto-detect backend: the remote host has 4 Nvidia GPUs and uses the docker server
 # (CUDA image, this machine's dev container); the AMD laptop (Strix Halo
 # iGPU, no nvidia-smi) uses the old distrobox container (Vulkan) instead.
 # BACKEND=vllm is never auto-selected -- opt in explicitly.
 if command -v nvidia-smi >/dev/null 2>&1 && [[ "$(nvidia-smi -L | wc -l)" -eq 4 ]]; then
-  ON_ONYX=1
+  ON_REMOTE_HOST=1
 else
-  ON_ONYX=0
+  ON_REMOTE_HOST=0
 fi
 if [[ -z "${BACKEND:-}" ]]; then
-  if [[ "$ON_ONYX" -eq 1 ]]; then
+  if [[ "$ON_REMOTE_HOST" -eq 1 ]]; then
     BACKEND=docker
   else
     BACKEND=distrobox
@@ -117,7 +117,7 @@ MULTI_GPU=0
 # turn it off.
 KV_QUANT=1
 # Number of parallel request slots llama-server keeps resident (continuous
-# batching across slots). Defaults to 3 on onyx so up to 3 concurrent
+# batching across slots). Defaults to 3 on the remote host so up to 3 concurrent
 # tasks/agents hitting this server get served at once instead of queuing
 # behind each other -- per-slot decode speed drops somewhat as more slots are
 # active simultaneously (see logs/concurrency_sweep*.csv), but that's a better
@@ -125,7 +125,7 @@ KV_QUANT=1
 # handle one slot, so it defaults to 1 there. Override via LLAMACPP_PARALLEL.
 # Note --ctx-size above is split across slots, so raising this shrinks each
 # slot's usable context.
-if [[ "$ON_ONYX" -eq 1 ]]; then
+if [[ "$ON_REMOTE_HOST" -eq 1 ]]; then
   LLAMACPP_PARALLEL=${LLAMACPP_PARALLEL:-3}
 else
   LLAMACPP_PARALLEL=${LLAMACPP_PARALLEL:-1}
@@ -402,7 +402,7 @@ if [[ "$BACKEND" == "vllm" ]]; then
   # GPU. Override with VLLM_GPU_MEM_UTIL if a model genuinely needs more.
   VLLM_GPU_MEM_UTIL=${VLLM_GPU_MEM_UTIL:-0.85}
 
-  echo "Using docker image '$VLLM_GGUF_IMAGE' as container '$CONTAINER_NAME' (onyx Nvidia backend)"
+  echo "Using docker image '$VLLM_GGUF_IMAGE' as container '$CONTAINER_NAME' (remote host Nvidia backend)"
   echo "Model file: $MODEL_FILE | tokenizer: $TOKENIZER_REPO | tensor-parallel-size: $TP | max-model-len: $CTX | gpu-memory-utilization: $VLLM_GPU_MEM_UTIL"
   echo "GPU flags: ${VLLM_GPU_FLAGS[*]}"
 
@@ -431,7 +431,7 @@ if [[ "$BACKEND" == "vllm" ]]; then
   exit "$status"
 fi
 
-echo "Using docker image '$IMAGE' as container '$CONTAINER_NAME' (onyx 4x Nvidia backend)"
+echo "Using docker image '$IMAGE' as container '$CONTAINER_NAME' (remote host 4x Nvidia backend)"
 echo "Context: $CTX per slot x $LLAMACPP_PARALLEL parallel slots = $LLAMACPP_CTX_TOTAL total --ctx-size"
 
 GPU_FLAGS=(--device /dev/dri)

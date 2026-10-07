@@ -193,9 +193,9 @@ cp opencode.json ~/.config/opencode/opencode.json
 | Provider key | Backend | Port | Launch command |
 |---|---|---|---|
 | `llama-cpp` | llama.cpp local | 8010 | `./launch_local_llm.sh` |
-| `llama-cpp-onyx` | llama.cpp on onyx (SSH tunnel) | 8001 | `./connect-remote-llm.sh` |
+| `llama-cpp-remote` | llama.cpp on `$REMOTE_HOST` (SSH tunnel) | 8001 | `./connect-remote-llm.sh` |
 | `ollama` | Ollama local | 11434 | `ollama serve` |
-| `onyx` | Ollama on onyx (SSH tunnel) | 11435 | `./connect-remote-llm.sh` |
+| `ollama-remote` | Ollama on `$REMOTE_HOST` (SSH tunnel) | 11435 | `./connect-remote-llm.sh` |
 
 ---
 

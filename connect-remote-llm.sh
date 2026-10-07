@@ -20,24 +20,25 @@ MODEL_NAME=${1:-qwen3.8-27b}
 QUANT=${2:-}
 BACKEND=${BACKEND:-}
 [ -f "$SCRIPT_DIR/.env" ] && set -a && source "$SCRIPT_DIR/.env" && set +a
+: "${REMOTE_HOST:?set REMOTE_HOST in $SCRIPT_DIR/.env}"
 
 kinit -r 28d "$KERB_PRINCIPAL" 2>/dev/null || true
 
 # Kill any stale SSH tunnels on port 8001/11435. The forwarding is defined in
 # ~/.ssh/config (LocalForward), not on the command line, so match on the
 # ssh config alias instead of a -L/port pattern.
-if pkill -f "ssh.*onyx-llamacpp" 2>/dev/null; then
+if pkill -f "ssh.*${REMOTE_HOST}-llamacpp" 2>/dev/null; then
   echo "Killing stale tunnel on localhost:8001..."
   sleep 1
 fi
-if pkill -f "ssh.*onyx-ollama" 2>/dev/null; then
+if pkill -f "ssh.*${REMOTE_HOST}-ollama" 2>/dev/null; then
   echo "Killing stale tunnel on localhost:11435..."
   sleep 1
 fi
 
-# Port forwarding in background (uses ~/.ssh/config aliases: onyx-llamacpp,
-# onyx-ollama, which define the LocalForward ports -- port 8020 for vLLM
-# rides the onyx-llamacpp connection, see the header comment)
+# Port forwarding in background (uses ~/.ssh/config aliases: ${REMOTE_HOST}-llamacpp,
+# ${REMOTE_HOST}-ollama, which define the LocalForward ports -- port 8020 for vLLM
+# rides the ${REMOTE_HOST}-llamacpp connection, see the header comment)
 echo "Setting up port forwarding: ${REMOTE_HOST}-llamacpp (llama-server -> localhost:8001, vLLM -> localhost:8020)"
 ssh -f -N \
   -o ServerAliveInterval=30 \
