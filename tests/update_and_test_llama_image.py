@@ -91,7 +91,7 @@ def start_container(image: str, model: dict) -> None:
         "docker", "run", "-d", "--name", CONTAINER_NAME,
         *gpu_docker_flags(),
         "-v", f"{MODELS_DIR}:{MODELS_DIR}",
-        "-p", f"{PORT}:8000",
+        "-p", f"127.0.0.1:{PORT}:8000",
         image,
         "-m", model["path"],
         "--alias", model["alias"],

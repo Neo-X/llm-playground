@@ -339,7 +339,7 @@ if [[ "$BACKEND" == "distrobox" ]]; then
   echo "Using distrobox container '$DISTROBOX_CONTAINER' (AMD laptop backend)"
   CMD="llama-server -m $MODEL_FILE --alias $ALIAS"
   [[ -n "$MMPROJ" && -f "$MMPROJ" ]] && CMD="$CMD --mmproj $MMPROJ --image-min-tokens 1024"
-  CMD="$CMD -ngl 999 --no-mmap --ctx-size $LLAMACPP_CTX_TOTAL --host 0.0.0.0 --port 8000 --jinja --parallel $LLAMACPP_PARALLEL"
+  CMD="$CMD -ngl 999 --no-mmap --ctx-size $LLAMACPP_CTX_TOTAL --host 127.0.0.1 --port 8000 --jinja --parallel $LLAMACPP_PARALLEL"
   [[ "$KV_QUANT" -eq 1 ]] && CMD="$CMD --cache-type-k q8_0 --cache-type-v q8_0"
   CMD="$CMD ${EXTRA_FLAGS[*]}"
   distrobox enter "$DISTROBOX_CONTAINER" -- bash -c "$CMD"
@@ -375,7 +375,9 @@ if [[ "$BACKEND" == "vllm" ]]; then
 
   TP=${TP:-1}
   HF_TOKEN_FLAGS=()
-  [[ -n "${HF_TOKEN:-}" ]] && HF_TOKEN_FLAGS=(--env "HF_TOKEN=$HF_TOKEN")
+  # Pass by name only (docker reads the value from this env) so the token
+  # never appears on the docker run command line, visible in `ps` to other users.
+  [[ -n "${HF_TOKEN:-}" ]] && export HF_TOKEN && HF_TOKEN_FLAGS=(--env HF_TOKEN)
 
   # Same MULTI_GPU pinning as the llama.cpp docker backend below (see the
   # comment above the model case statement) -- this was previously hardcoded
@@ -412,7 +414,7 @@ if [[ "$BACKEND" == "vllm" ]]; then
     -v "$MODELS:$MODELS" \
     -v ~/.cache/huggingface:/root/.cache/huggingface \
     "${HF_TOKEN_FLAGS[@]}" \
-    -p 8020:8020 \
+    -p 127.0.0.1:8020:8020 \
     "$VLLM_GGUF_IMAGE" \
     --model "$MODEL_FILE" --tokenizer "$TOKENIZER_REPO" --served-model-name "$ALIAS" \
     --port 8020 \
@@ -462,11 +464,15 @@ KV_CACHE_FLAGS=()
 # Runs attached (no -d), so all llama-server output stays in this terminal and
 # the shell blocks here until the container exits. If it exits early (crash,
 # OOM, etc.) that's easy to miss as just "the prompt came back" -- make it loud.
+# The port is published on 127.0.0.1 only (Docker's iptables rules bypass ufw,
+# so a bare -p would expose the unauthenticated server to the whole network);
+# remote access goes through the ssh LocalForward tunnel. --host 0.0.0.0 below
+# is inside the container and must stay so the published port can reach it.
 set +e
 docker run --rm --name "$CONTAINER_NAME" \
   "${GPU_FLAGS[@]}" \
   -v "$MODELS:$MODELS" \
-  -p 8010:8010 \
+  -p 127.0.0.1:8010:8010 \
   "$IMAGE" \
   -m "$MODEL_FILE" --alias "$ALIAS" "${MMPROJ_FLAGS[@]}" \
   -ngl 999 --load-mode none --ctx-size "$LLAMACPP_CTX_TOTAL" --host 0.0.0.0 --port 8010 --jinja \
