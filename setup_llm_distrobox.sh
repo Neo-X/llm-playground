@@ -28,7 +28,7 @@ distrobox create \
   --name "$CONTAINER_NAME" \
   --image docker.io/kyuz0/amd-strix-halo-toolboxes:vulkan-radv \
   --home "$MODELS_DIR" \
-  --additional-flags "--device /dev/dri --device /dev/kfd --group-add video --group-add render --security-opt seccomp=unconfined"
+  --additional-flags "--device /dev/dri --device /dev/kfd --group-add video --group-add render"
 
 echo ""
 echo "=== Setup complete! ==="

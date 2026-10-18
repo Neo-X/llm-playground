@@ -71,7 +71,7 @@ def _server_cmd(model: str, port: int, ctx_size: int, base_flags: str, extra_fla
     return (
         f"llama-server -m {model} -ngl 999 --no-mmap "
         f"--ctx-size {ctx_size} "
-        f"--host 0.0.0.0 --port {port} "
+        f"--host 127.0.0.1 --port {port} "
         f"--jinja --cache-type-k q8_0 --cache-type-v q8_0 "
         f"{flags}"
     )

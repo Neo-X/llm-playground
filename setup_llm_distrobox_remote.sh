@@ -52,7 +52,7 @@ if ! distrobox list 2>/dev/null | grep -q "$CONTAINER_NAME"; then
     --name "$CONTAINER_NAME" \
     --image "$CUDA_IMAGE" \
     --home "$HOME" \
-    --additional-flags "--gpus all --security-opt seccomp=unconfined"
+    --additional-flags "--gpus all"
 fi
 
 # Initialize the container on first run (sets up user env non-interactively)

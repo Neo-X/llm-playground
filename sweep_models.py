@@ -84,6 +84,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--out-csv", type=str, default="logs/model_sweep.csv")
     parser.add_argument("--out-png", type=str, default="logs/model_sweep.png")
+    parser.add_argument(
+        "--check-model-files",
+        action="store_true",
+        help="Before running, verify each llamacpp/vllm model's GGUF file exists locally "
+        "(via launch_local_llm.sh's CHECK_FILE_ONLY mode) and skip model/backend combos "
+        "whose files are missing, instead of discovering it after launching a server.",
+    )
     return parser.parse_args()
 
 
@@ -112,6 +119,38 @@ def wait_for_local_server(
             pass
         time.sleep(3)
     raise TimeoutError(f"{label} at {host} did not become ready within {timeout}s")
+
+
+def local_model_file_exists(alias: str) -> tuple[bool, str]:
+    """Ask launch_local_llm.sh whether alias's GGUF file(s) are present on disk,
+    without downloading or launching anything."""
+    env = os.environ.copy()
+    env["CHECK_FILE_ONLY"] = "1"
+    result = subprocess.run(
+        ["./launch_local_llm.sh", alias], cwd=REPO_ROOT, env=env, capture_output=True, text=True,
+    )
+    detail = result.stdout.strip() or result.stderr.strip()
+    return result.returncode == 0, detail
+
+
+def check_model_files(models: list[str], backends: list[str]) -> set[tuple[str, str]]:
+    """Preflight check for the llamacpp/vllm backends' local GGUF files. Returns
+    the set of (model, backend) pairs to skip because their file is missing."""
+    skip: set[tuple[str, str]] = set()
+    print("Checking local model files...")
+    for model in models:
+        for backend in backends:
+            if backend == "ollama":
+                continue
+            alias = (LLAMACPP_ALIASES if backend == "llamacpp" else VLLM_ALIASES).get(model)
+            if alias is None:
+                continue
+            exists, detail = local_model_file_exists(alias)
+            status = "OK" if exists else "MISSING"
+            print(f"  [{status}] {model} | {backend} (alias '{alias}'): {detail}")
+            if not exists:
+                skip.add((model, backend))
+    return skip
 
 
 def start_local_server(alias: str, log_path: str, backend_env: str | None = None) -> subprocess.Popen:
@@ -275,10 +314,17 @@ def main() -> None:
         args.prompt = handle.read()
     print(f"Loaded prompt from {args.prompt_file} ({len(args.prompt)} chars)")
 
+    skip_combos: set[tuple[str, str]] = set()
+    if args.check_model_files:
+        skip_combos = check_model_files(args.models, args.backends)
+
     rows = []
     timestamp = datetime.now(timezone.utc).isoformat()
     for model in args.models:
         for backend in args.backends:
+            if (model, backend) in skip_combos:
+                print(f"=== {model} | {backend} === SKIPPED: model file not found locally")
+                continue
             print(f"=== {model} | {backend} ===")
             try:
                 summary = run_backend_for_model(backend=backend, model=model, args=args)

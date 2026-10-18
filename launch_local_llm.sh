@@ -3,7 +3,7 @@
 ## vLLM's OpenAI-compatible server, both via docker.
 ##
 ## Three backends:
-##   - BACKEND=docker (auto-selected on Onyx, 4x Nvidia GPUs): llama-server
+##   - BACKEND=docker (auto-selected on the remote host, 4x Nvidia GPUs): llama-server
 ##     via the official ghcr.io/ggml-org/llama.cpp CUDA image (this
 ##     machine's dev container is CUDA-based, so native CUDA kernels are
 ##     used rather than Vulkan). Use tests/update_and_test_llama_image.py to
@@ -20,7 +20,7 @@
 ##     experimental GGUF loader (vllm-gguf-plugin). Use this when you want
 ##     continuous batching / PagedAttention for many concurrent users or
 ##     agents hitting the server at once -- llama-server serves requests
-##     with much less request-level concurrency. Onyx (Nvidia) only; not
+##     with much less request-level concurrency. Remote host (Nvidia) only; not
 ##     every model alias supports it (see VLLM_SUPPORTED below -- sharded
 ##     GGUFs aren't supported by vLLM's GGUF loader).
 ##     qwen3.6-35b-a3b/qwen3.6-27b/qwen3.8-27b need vllm-gguf-plugin's
@@ -41,7 +41,7 @@
 ##
 ## Usage: ./launch_local_llm.sh [model] [quant]
 ##
-## Models (image is CUDA on onyx / Vulkan on the AMD laptop, per backend above,
+## Models (image is CUDA on the remote host / Vulkan on the AMD laptop, per backend above,
 ## except deepseek-v4-flash-q8 which always forces CUDA):
 ##   qwen3.6-35b-a3b       (default) — Qwen3.6-35B-A3B MoE
 ##   qwen3.6-27b                     — Qwen3.6-27B dense
@@ -67,12 +67,17 @@ VLLM_GGUF_IMAGE="vllm-openai-gguf:${VLLM_GGUF_PLUGIN_REF:0:12}"
 DISTROBOX_CONTAINER=llama-vulkan-radv
 MODEL_NAME=${1:-qwen3.6-35b-a3b}
 
-# Auto-detect backend: onyx has 4 Nvidia GPUs and uses the docker server
+# Auto-detect backend: the remote host has 4 Nvidia GPUs and uses the docker server
 # (CUDA image, this machine's dev container); the AMD laptop (Strix Halo
 # iGPU, no nvidia-smi) uses the old distrobox container (Vulkan) instead.
 # BACKEND=vllm is never auto-selected -- opt in explicitly.
+if command -v nvidia-smi >/dev/null 2>&1 && [[ "$(nvidia-smi -L | wc -l)" -eq 4 ]]; then
+  ON_REMOTE_HOST=1
+else
+  ON_REMOTE_HOST=0
+fi
 if [[ -z "${BACKEND:-}" ]]; then
-  if command -v nvidia-smi >/dev/null 2>&1 && [[ "$(nvidia-smi -L | wc -l)" -eq 4 ]]; then
+  if [[ "$ON_REMOTE_HOST" -eq 1 ]]; then
     BACKEND=docker
   else
     BACKEND=distrobox
@@ -112,14 +117,19 @@ MULTI_GPU=0
 # turn it off.
 KV_QUANT=1
 # Number of parallel request slots llama-server keeps resident (continuous
-# batching across slots). Defaults to 3 so up to 3 concurrent tasks/agents
-# hitting this server get served at once instead of queuing behind each
-# other -- per-slot decode speed drops somewhat as more slots are active
-# simultaneously (see logs/concurrency_sweep*.csv), but that's a better
-# tradeoff than one task blocking the others outright. Override via
-# LLAMACPP_PARALLEL. Note --ctx-size above is split across slots, so raising
-# this shrinks each slot's usable context.
-LLAMACPP_PARALLEL=${LLAMACPP_PARALLEL:-3}
+# batching across slots). Defaults to 3 on the remote host so up to 3 concurrent
+# tasks/agents hitting this server get served at once instead of queuing
+# behind each other -- per-slot decode speed drops somewhat as more slots are
+# active simultaneously (see logs/concurrency_sweep*.csv), but that's a better
+# tradeoff than one task blocking the others outright. The AMD laptop can only
+# handle one slot, so it defaults to 1 there. Override via LLAMACPP_PARALLEL.
+# Note --ctx-size above is split across slots, so raising this shrinks each
+# slot's usable context.
+if [[ "$ON_REMOTE_HOST" -eq 1 ]]; then
+  LLAMACPP_PARALLEL=${LLAMACPP_PARALLEL:-3}
+else
+  LLAMACPP_PARALLEL=${LLAMACPP_PARALLEL:-1}
+fi
 case "$MODEL_NAME" in
   qwen3.6-35b-a3b)
     QUANT=${2:-UD-Q4_K_XL}
@@ -298,6 +308,23 @@ maybe_download_sharded() {
   HF_XET_HIGH_PERFORMANCE=1 hf download "$HF_REPO" --include "$include_pattern" --local-dir "$local_dir"
 }
 
+if [[ "${CHECK_FILE_ONLY:-0}" == "1" ]]; then
+  # Report whether this alias's model file(s) are present on disk, without
+  # downloading or launching anything -- used by sweep_models.py's
+  # --check-model-files preflight to catch missing GGUFs before it spends
+  # time launching a server that will just fail.
+  status="MISSING"
+  [[ -f "$MODEL_FILE" ]] && status="EXISTS"
+  echo "$status $MODEL_FILE"
+  if [[ -n "$MMPROJ" ]]; then
+    mmproj_status="MISSING"
+    [[ -f "$MMPROJ" ]] && mmproj_status="EXISTS"
+    echo "$mmproj_status $MMPROJ"
+  fi
+  [[ "$status" == "EXISTS" ]]
+  exit $?
+fi
+
 if [[ -n "${HF_INCLUDE:-}" ]]; then
   maybe_download_sharded "$MODEL_FILE" "$HF_INCLUDE" "$MODEL_DIR"
 else
@@ -312,7 +339,7 @@ if [[ "$BACKEND" == "distrobox" ]]; then
   echo "Using distrobox container '$DISTROBOX_CONTAINER' (AMD laptop backend)"
   CMD="llama-server -m $MODEL_FILE --alias $ALIAS"
   [[ -n "$MMPROJ" && -f "$MMPROJ" ]] && CMD="$CMD --mmproj $MMPROJ --image-min-tokens 1024"
-  CMD="$CMD -ngl 999 --no-mmap --ctx-size $LLAMACPP_CTX_TOTAL --host 0.0.0.0 --port 8000 --jinja --parallel $LLAMACPP_PARALLEL"
+  CMD="$CMD -ngl 999 --no-mmap --ctx-size $LLAMACPP_CTX_TOTAL --host 127.0.0.1 --port 8000 --jinja --parallel $LLAMACPP_PARALLEL"
   [[ "$KV_QUANT" -eq 1 ]] && CMD="$CMD --cache-type-k q8_0 --cache-type-v q8_0"
   CMD="$CMD ${EXTRA_FLAGS[*]}"
   distrobox enter "$DISTROBOX_CONTAINER" -- bash -c "$CMD"
@@ -348,7 +375,9 @@ if [[ "$BACKEND" == "vllm" ]]; then
 
   TP=${TP:-1}
   HF_TOKEN_FLAGS=()
-  [[ -n "${HF_TOKEN:-}" ]] && HF_TOKEN_FLAGS=(--env "HF_TOKEN=$HF_TOKEN")
+  # Pass by name only (docker reads the value from this env) so the token
+  # never appears on the docker run command line, visible in `ps` to other users.
+  [[ -n "${HF_TOKEN:-}" ]] && export HF_TOKEN && HF_TOKEN_FLAGS=(--env HF_TOKEN)
 
   # Same MULTI_GPU pinning as the llama.cpp docker backend below (see the
   # comment above the model case statement) -- this was previously hardcoded
@@ -373,7 +402,7 @@ if [[ "$BACKEND" == "vllm" ]]; then
   # GPU. Override with VLLM_GPU_MEM_UTIL if a model genuinely needs more.
   VLLM_GPU_MEM_UTIL=${VLLM_GPU_MEM_UTIL:-0.85}
 
-  echo "Using docker image '$VLLM_GGUF_IMAGE' as container '$CONTAINER_NAME' (onyx Nvidia backend)"
+  echo "Using docker image '$VLLM_GGUF_IMAGE' as container '$CONTAINER_NAME' (remote host Nvidia backend)"
   echo "Model file: $MODEL_FILE | tokenizer: $TOKENIZER_REPO | tensor-parallel-size: $TP | max-model-len: $CTX | gpu-memory-utilization: $VLLM_GPU_MEM_UTIL"
   echo "GPU flags: ${VLLM_GPU_FLAGS[*]}"
 
@@ -385,9 +414,10 @@ if [[ "$BACKEND" == "vllm" ]]; then
     -v "$MODELS:$MODELS" \
     -v ~/.cache/huggingface:/root/.cache/huggingface \
     "${HF_TOKEN_FLAGS[@]}" \
-    -p 8020:8000 \
+    -p 127.0.0.1:8020:8020 \
     "$VLLM_GGUF_IMAGE" \
     --model "$MODEL_FILE" --tokenizer "$TOKENIZER_REPO" --served-model-name "$ALIAS" \
+    --port 8020 \
     --tensor-parallel-size "$TP" --max-model-len "$CTX" --gpu-memory-utilization "$VLLM_GPU_MEM_UTIL" \
     --enable-auto-tool-choice --tool-call-parser "$TOOL_PARSER"
   status=$?
@@ -401,7 +431,7 @@ if [[ "$BACKEND" == "vllm" ]]; then
   exit "$status"
 fi
 
-echo "Using docker image '$IMAGE' as container '$CONTAINER_NAME' (onyx 4x Nvidia backend)"
+echo "Using docker image '$IMAGE' as container '$CONTAINER_NAME' (remote host 4x Nvidia backend)"
 echo "Context: $CTX per slot x $LLAMACPP_PARALLEL parallel slots = $LLAMACPP_CTX_TOTAL total --ctx-size"
 
 GPU_FLAGS=(--device /dev/dri)
@@ -434,11 +464,15 @@ KV_CACHE_FLAGS=()
 # Runs attached (no -d), so all llama-server output stays in this terminal and
 # the shell blocks here until the container exits. If it exits early (crash,
 # OOM, etc.) that's easy to miss as just "the prompt came back" -- make it loud.
+# The port is published on 127.0.0.1 only (Docker's iptables rules bypass ufw,
+# so a bare -p would expose the unauthenticated server to the whole network);
+# remote access goes through the ssh LocalForward tunnel. --host 0.0.0.0 below
+# is inside the container and must stay so the published port can reach it.
 set +e
 docker run --rm --name "$CONTAINER_NAME" \
   "${GPU_FLAGS[@]}" \
   -v "$MODELS:$MODELS" \
-  -p 8010:8010 \
+  -p 127.0.0.1:8010:8010 \
   "$IMAGE" \
   -m "$MODEL_FILE" --alias "$ALIAS" "${MMPROJ_FLAGS[@]}" \
   -ngl 999 --load-mode none --ctx-size "$LLAMACPP_CTX_TOTAL" --host 0.0.0.0 --port 8010 --jinja \

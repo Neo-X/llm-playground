@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["requests"]
 # ///
-"""Text + vision regression test for the *remote* llama.cpp server (onyx),
+"""Text + vision regression test for the *remote* llama.cpp server ($REMOTE_HOST),
 reached the same way connect-remote-llm.sh reaches it.
 
 This is the remote counterpart to update_and_test_llama_image.py, which
@@ -13,7 +13,7 @@ connect-remote-llm.sh uses (ssh config alias "<REMOTE_HOST>-llamacpp",
 LocalForward 8001 -> remote:8000), launches launch_local_llm.sh on the
 remote host non-interactively (no long-lived interactive shell, unlike
 connect-remote-llm.sh itself), waits for the tunneled port to come up, and
-then runs the same opencode-based checks against the "llama-cpp-onyx"
+then runs the same opencode-based checks against the "llama-cpp-remote"
 provider (see ~/.config/opencode/opencode.json).
 
 Usage:
@@ -51,7 +51,7 @@ def load_env() -> dict:
 
 
 _ENV = load_env()
-REMOTE_HOST = _ENV.get("REMOTE_HOST", "onyx")
+REMOTE_HOST = _ENV.get("REMOTE_HOST") or sys.exit(f"set REMOTE_HOST in {ENV_FILE}")
 KERB_PRINCIPAL = _ENV.get("KERB_PRINCIPAL", "")
 # connect-remote-llm.sh assumes the repo lives at the same absolute path on
 # both machines (it interpolates its own local SCRIPT_DIR into the remote
@@ -59,13 +59,13 @@ KERB_PRINCIPAL = _ENV.get("KERB_PRINCIPAL", "")
 REMOTE_REPO_DIR = REPO_DIR
 
 LLAMACPP_TUNNEL_HOST = f"{REMOTE_HOST}-llamacpp"  # ssh config alias: LocalForward 8001 -> localhost:8000
-OPENCODE_PROVIDER = "llama-cpp-onyx"
+OPENCODE_PROVIDER = "llama-cpp-remote"
 PORT = 8001
 STARTUP_TIMEOUT_S = 600
 OPENCODE_TIMEOUT_S = 600
 REMOTE_LOG = "/tmp/llama-server-remote-test.log"
 
-# Only models actually wired up under the "llama-cpp-onyx" provider in
+# Only models actually wired up under the "llama-cpp-remote" provider in
 # opencode.json can be exercised end-to-end here.
 MODELS = [
     {
