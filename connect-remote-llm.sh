@@ -5,7 +5,7 @@
 # (llama-server), the Ollama-on-remote provider (localhost:11435), or
 # http://localhost:8020 (vLLM, when BACKEND=vllm).
 #
-# Usage: ./connect-remote-llm.sh [model] [quant]
+# Usage: ./connect-remote-llm.sh [model] [quant]   (defaults to BACKEND=docker)
 #        BACKEND=vllm ./connect-remote-llm.sh qwen2.5-3b
 # See launch_local_llm.sh for the list of supported models/quants, and for
 # which models/quants support BACKEND=vllm.
@@ -18,7 +18,15 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MODEL_NAME=${1:-qwen3.8-27b}
 QUANT=${2:-}
-BACKEND=${BACKEND:-}
+# Default to docker: the remote machine (onyx) always has 4 Nvidia GPUs, but
+# launch_local_llm.sh's own BACKEND auto-detection (nvidia-smi on PATH) is
+# unreliable over this script's non-interactive SSH invocation below --
+# `source ~/.bashrc` is a no-op there since most distros' .bashrc early-return
+# for non-interactive shells, so nvidia-smi can silently fail to resolve and
+# auto-detect falls back to BACKEND=distrobox (which targets the AMD laptop's
+# container and doesn't exist on onyx). Pin it here instead; pass BACKEND=vllm
+# explicitly when you want that backend.
+BACKEND=${BACKEND:-docker}
 [ -f "$SCRIPT_DIR/.env" ] && set -a && source "$SCRIPT_DIR/.env" && set +a
 
 kinit -r 28d "$KERB_PRINCIPAL" 2>/dev/null || true
